@@ -1,4 +1,10 @@
-# DXVK built using LLVM-Mingw + LTO
+# DXVK v2.4.1 – MinGW-LLVM Build with LTO
+This is a custom DXVK build compiled using MinGW-LLVM (LLVM 19.1.7) with LTO.
+
+**Built by:** SHANKAR VALLABHAN (v3kt0r-87)
+<br>
+**Original Project:** [DXVK](https://github.com/doitsujin/dxvk)  
+
 
 A Vulkan-based translation layer for Direct3D 8/9/10/11 which allows running 3D applications on Linux using Wine.
 

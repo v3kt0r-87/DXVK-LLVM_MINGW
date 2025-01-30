@@ -1,9 +1,10 @@
 [binaries]
-c = 'i686-w64-mingw32-gcc'
-cpp = 'i686-w64-mingw32-g++'
+c = 'i686-w64-mingw32-clang'
+cpp = 'i686-w64-mingw32-clang++'
 ar = 'i686-w64-mingw32-ar'
-strip = 'i686-w64-mingw32-strip'
+strip = 'llvm-strip'
 windres = 'i686-w64-mingw32-windres'
+
 
 [properties]
 needs_exe_wrapper = true

@@ -9,6 +9,35 @@ if [ -z "$1" ] || [ -z "$2" ]; then
   exit 1
 fi
 
+install_llvm_mingw() {
+
+    # LLVM MinGW Setup
+    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-migw-19.1.7/llvm-mingw.zip"
+    LLVM_MINGW_PATH="$(pwd)/llvm-mingw"
+
+
+    echo "Checking for LLVM MinGW..."
+
+    if [ ! -d "$LLVM_MINGW_PATH" ]; then
+
+        echo "LLVM MinGW not found! Downloading..."
+
+        wget -O llvm-mingw.zip "$LLVM_MINGW_URL"
+
+        unzip llvm-mingw.zip -d "$LLVM_MINGW_PATH"
+        rm llvm-mingw.zip
+
+        echo "LLVM MinGW installed successfully!"
+
+    else
+        echo "LLVM MinGW is already installed."
+    fi
+
+    export PATH="$(pwd)/llvm-mingw/bin:$PATH"
+}
+
+install_llvm_mingw
+
 DXVK_VERSION="$1"
 DXVK_SRC_DIR=$(readlink -f "$0")
 DXVK_SRC_DIR=$(dirname "$DXVK_SRC_DIR")
@@ -28,8 +57,10 @@ opt_buildid=false
 opt_64_only=0
 opt_32_only=0
 
-CC=${CC:="gcc"}
-CXX=${CXX:="g++"}
+CC=${CC:="clang"}
+CXX=${CXX:="clang++"}
+
+export LDFLAGS="-fuse-ld=lld"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -64,7 +95,7 @@ function build_arch {
     opt_strip=--strip
   fi
 
-  CC="$CC -m$1" CXX="$CXX -m$1" meson setup  \
+  CC="$CC" CXX="$CXX" meson setup  \
         --buildtype "release"                \
         --prefix "$DXVK_BUILD_DIR/usr"       \
         $opt_strip                           \
@@ -72,6 +103,7 @@ function build_arch {
         --libdir "$2"                        \
         -Dbuild_id=$opt_buildid              \
         --force-fallback-for=libdisplay-info \
+        -Db_lto=true                         \
         "$DXVK_BUILD_DIR/build.$1"
 
   cd "$DXVK_BUILD_DIR/build.$1"

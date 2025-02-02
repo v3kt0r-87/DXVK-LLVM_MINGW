@@ -4,6 +4,8 @@ cpp = 'x86_64-w64-mingw32-clang++'
 ar = 'x86_64-w64-mingw32-ar'
 strip = 'llvm-strip'
 windres = 'x86_64-w64-mingw32-windres'
+c_ld = 'lld'
+cpp_ld = 'lld'
 
 [properties]
 needs_exe_wrapper = true

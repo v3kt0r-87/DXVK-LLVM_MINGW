@@ -10,6 +10,7 @@ cc = meson.get_compiler('c')
 dxvk_is_msvc = cpp.get_argument_syntax() == 'msvc'
 
 compiler_args = [
+  '-flto=full',
   '-msse',
   '-msse2',
   '-msse3',
@@ -28,7 +29,7 @@ compiler_args = [
   '-Wno-missing-braces',
 ]
 
-link_args = []
+link_args = ['-flto=full']
 
 if get_option('build_id')
   link_args += [

@@ -4,6 +4,8 @@ cpp = 'i686-w64-mingw32-clang++'
 ar = 'i686-w64-mingw32-ar'
 strip = 'llvm-strip'
 windres = 'i686-w64-mingw32-windres'
+c_ld = 'lld'
+cpp_ld = 'lld'
 
 
 [properties]

@@ -6,8 +6,10 @@ shopt -s extglob
 
 install_llvm_mingw() {
 
+    sudo apt install glslang-tools  glslang-dev -y
+
     # LLVM MinGW Setup
-    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-migw-19.1.7/llvm-mingw.zip"
+    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-mingw-20.0.1.0-RC1/llvm-migw-20.0.1.0-RC1.zip"
     LLVM_MINGW_PATH="$(pwd)/llvm-mingw"
 
 

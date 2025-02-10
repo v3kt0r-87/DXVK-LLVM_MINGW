@@ -1661,7 +1661,7 @@ namespace dxvk {
 
   // Render States //
 
-  // ZBIAS can be an integer from 0 to 1 and needs to be remapped to float
+  // ZBIAS can be an integer from 0 to 16 and needs to be remapped to float
   static constexpr float ZBIAS_SCALE     = -0.000005f;
   static constexpr float ZBIAS_SCALE_INV = 1 / ZBIAS_SCALE;
 
@@ -1683,8 +1683,9 @@ namespace dxvk {
         m_linePattern = bit::cast<D3DLINEPATTERN>(Value);
         return D3D_OK;
 
-      // Not supported by D3D8.
+      // Not supported by D3D8, but its value is stored.
       case D3DRS_ZVISIBLE:
+        m_zVisible = Value;
         return D3D_OK;
 
       // TODO: Implement D3DRS_ANTIALIASEDLINEENABLE in D9VK.
@@ -1694,7 +1695,7 @@ namespace dxvk {
 
       case D3DRS_ZBIAS:
         State9 = d3d9::D3DRS_DEPTHBIAS;
-        Value  = bit::cast<DWORD>(float(Value) * ZBIAS_SCALE);
+        Value  = bit::cast<DWORD>(static_cast<float>(Value) * ZBIAS_SCALE);
         break;
 
       case D3DRS_SOFTWAREVERTEXPROCESSING:
@@ -1745,9 +1746,9 @@ namespace dxvk {
         *pValue = bit::cast<DWORD>(m_linePattern);
         return D3D_OK;
 
-      // Not supported by D3D8.
+      // Not supported by D3D8, but its value is stored.
       case D3DRS_ZVISIBLE:
-        *pValue = 0;
+        *pValue = m_zVisible;
         return D3D_OK;
 
       case D3DRS_EDGEANTIALIAS:
@@ -1755,9 +1756,9 @@ namespace dxvk {
         break;
 
       case D3DRS_ZBIAS: {
-        float bias  = 0;
-        HRESULT res = GetD3D9()->GetRenderState(d3d9::D3DRS_DEPTHBIAS, (DWORD*)&bias);
-        *pValue     = bit::cast<DWORD>(bias * ZBIAS_SCALE_INV);
+        DWORD bias  = 0;
+        HRESULT res = GetD3D9()->GetRenderState(d3d9::D3DRS_DEPTHBIAS, &bias);
+        *pValue     = static_cast<DWORD>(bit::cast<float>(bias) * ZBIAS_SCALE_INV);
         return res;
       } break;
 

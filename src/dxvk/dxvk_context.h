@@ -700,7 +700,7 @@ namespace dxvk {
     
     /**
      * \brief Discards contents of an image view
-     * 
+     *
      * Discards the current contents of the image
      * and performs a fast layout transition. This
      * may improve performance in some cases.
@@ -710,6 +710,14 @@ namespace dxvk {
     void discardImageView(
       const Rc<DxvkImageView>&      imageView,
             VkImageAspectFlags      discardAspects);
+
+    /**
+     * \brief Discards contents of an image
+     *
+     * \param [in] image Image to discard
+     */
+    void discardImage(
+      const Rc<DxvkImage>&          image);
 
     /**
      * \brief Starts compute jobs
@@ -1601,6 +1609,14 @@ namespace dxvk {
             VkResolveModeFlagBits     depthMode,
             VkResolveModeFlagBits     stencilMode);
 
+    bool resolveImageInline(
+      const Rc<DxvkImage>&            dstImage,
+      const Rc<DxvkImage>&            srcImage,
+      const VkImageResolve&           region,
+            VkFormat                  format,
+            VkResolveModeFlagBits     depthMode,
+            VkResolveModeFlagBits     stencilMode);
+
     void uploadImageFb(
       const Rc<DxvkImage>&            image,
       const Rc<DxvkBuffer>&           source,
@@ -1800,6 +1816,10 @@ namespace dxvk {
 
     void splitCommands();
 
+    void discardRenderTarget(
+      const DxvkImage&                image,
+      const VkImageSubresourceRange&  subresources);
+
     void flushImageLayoutTransitions(
             DxvkCmdBuffer             cmdBuffer);
 
@@ -1981,6 +2001,10 @@ namespace dxvk {
     static bool formatsAreCopyCompatible(
             VkFormat                  imageFormat,
             VkFormat                  bufferFormat);
+
+    static bool formatsAreResolveCompatible(
+            VkFormat                  resolveFormat,
+            VkFormat                  viewFormat);
 
     static VkFormat sanitizeTexelBufferFormat(
             VkFormat                  srcFormat);

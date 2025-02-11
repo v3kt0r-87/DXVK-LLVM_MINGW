@@ -4648,12 +4648,9 @@ namespace dxvk {
           VkFormat                  format,
           VkResolveModeFlagBits     depthMode,
           VkResolveModeFlagBits     stencilMode) {
-    // This optimization is only available in tiler mode
-    if (!m_device->perfHints().preferRenderPassOps)
-      return false;
-
-    // Need an active render pass to fold resolve into it
-    if (!m_flags.test(DxvkContextFlag::GpRenderPassBound))
+    // Need an active render pass with secondary command buffers to
+    // fold resolve operations into it
+    if (!m_flags.test(DxvkContextFlag::GpRenderPassSecondaryCmd))
       return false;
 
     // Check whether we're dealing with a color or depth attachment, one
@@ -4831,7 +4828,7 @@ namespace dxvk {
 
       if (stencilMode) {
         auto& stencil = m_state.om.renderingInfo.stencil;
-        stencil.resolveMode = depthMode;
+        stencil.resolveMode = stencilMode;
         stencil.resolveImageView = dstView->handle();
         stencil.resolveImageLayout = newLayout;
       }
@@ -5253,9 +5250,19 @@ namespace dxvk {
       renderingInheritance.stencilAttachmentFormat = depthStencilFormat;
     }
 
-    if (m_device->perfHints().preferRenderPassOps) {
+    // On drivers that don't natively support secondary command buffers, only
+    // use them to enable MSAA resolve attachments. Also ignore color-only
+    // render passes here since we almost certainly need the output anyway.
+    bool useSecondaryCmdBuffer = m_device->perfHints().preferRenderPassOps;
+
+    if (useSecondaryCmdBuffer && (m_device->perfHints().preferPrimaryCmdBufs || !depthStencilAspects))
+      useSecondaryCmdBuffer = renderingInheritance.rasterizationSamples > VK_SAMPLE_COUNT_1_BIT;
+
+    if (useSecondaryCmdBuffer) {
       // Begin secondary command buffer on tiling GPUs so that subsequent
       // resolve, discard and clear commands can modify render pass ops.
+      m_flags.set(DxvkContextFlag::GpRenderPassSecondaryCmd);
+
       renderingInfo.flags = VK_RENDERING_CONTENTS_SECONDARY_COMMAND_BUFFERS_BIT;
 
       m_cmd->beginSecondaryCommandBuffer(inheritance);
@@ -5279,7 +5286,8 @@ namespace dxvk {
   
   
   void DxvkContext::renderPassUnbindFramebuffer() {
-    if (m_device->perfHints().preferRenderPassOps) {
+    if (m_flags.test(DxvkContextFlag::GpRenderPassSecondaryCmd)) {
+      m_flags.clr(DxvkContextFlag::GpRenderPassSecondaryCmd);
       VkCommandBuffer cmdBuffer = m_cmd->endSecondaryCommandBuffer();
 
       // Record scoped rendering commands with potentially
@@ -7300,8 +7308,7 @@ namespace dxvk {
   void DxvkContext::discardRenderTarget(
     const DxvkImage&                image,
     const VkImageSubresourceRange&  subresources) {
-    if (!m_flags.test(DxvkContextFlag::GpRenderPassBound)
-     || !m_device->perfHints().preferRenderPassOps)
+    if (!m_flags.test(DxvkContextFlag::GpRenderPassSecondaryCmd))
       return;
 
     for (uint32_t i = 0; i < m_state.om.framebufferInfo.numAttachments(); i++) {

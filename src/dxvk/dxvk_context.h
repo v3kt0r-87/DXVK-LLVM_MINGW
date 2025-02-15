@@ -1441,6 +1441,7 @@ namespace dxvk {
     DxvkRenderTargetLayouts m_rtLayouts = { };
 
     std::vector<DxvkDeferredClear> m_deferredClears;
+    std::array<DxvkDeferredResolve, MaxNumRenderTargets + 1u> m_deferredResolves = { };
 
     std::vector<VkWriteDescriptorSet> m_descriptorWrites;
     std::vector<DxvkDescriptorInfo>   m_descriptors;
@@ -1609,6 +1610,12 @@ namespace dxvk {
             VkResolveModeFlagBits     depthMode,
             VkResolveModeFlagBits     stencilMode);
 
+    bool resolveImageClear(
+      const Rc<DxvkImage>&            dstImage,
+      const Rc<DxvkImage>&            srcImage,
+      const VkImageResolve&           region,
+            VkFormat                  format);
+
     bool resolveImageInline(
       const Rc<DxvkImage>&            dstImage,
       const Rc<DxvkImage>&            srcImage,
@@ -1650,6 +1657,10 @@ namespace dxvk {
             bool                      useRenderPass);
 
     void flushSharedImages();
+
+    void flushRenderPassResolves();
+
+    void flushResolves();
 
     void startRenderPass();
     void spillRenderPass(bool suspend);
@@ -1725,6 +1736,10 @@ namespace dxvk {
       const Rc<DxvkImage>&          image,
       const VkImageSubresourceRange& subresources,
             bool                    flushClears = true);
+
+    DxvkDeferredClear* findDeferredClear(
+      const Rc<DxvkImage>&          image,
+      const VkImageSubresourceRange& subresources);
 
     bool updateIndexBufferBinding();
     void updateVertexBufferBindings();

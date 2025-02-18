@@ -1846,8 +1846,9 @@ namespace dxvk {
           VkImageLayout             srcLayout,
           VkImageLayout             dstLayout) {
     this->spillRenderPass(false);
-    
+
     if (srcLayout != dstLayout) {
+      prepareImage(dstImage, dstSubresources);
       flushPendingAccesses(*dstImage, dstSubresources, DxvkAccess::Write);
 
       accessImage(DxvkCmdBuffer::ExecBuffer,
@@ -3763,7 +3764,8 @@ namespace dxvk {
     if (attachmentIndex < 0) {
       this->spillRenderPass(false);
 
-      flushPendingAccesses(*imageView->image(), imageView->imageSubresources(), DxvkAccess::Write);
+      this->prepareImage(imageView->image(), imageView->subresources());
+      this->flushPendingAccesses(*imageView->image(), imageView->imageSubresources(), DxvkAccess::Write);
 
       if (unlikely(m_features.test(DxvkContextFeature::DebugUtils))) {
         const char* dstName = imageView->image()->info().debugName;
@@ -3867,6 +3869,7 @@ namespace dxvk {
       spillRenderPass(false);
       invalidateState();
 
+      prepareImage(imageView->image(), imageView->subresources());
       flushPendingAccesses(*imageView->image(), imageView->imageSubresources(), DxvkAccess::Write);
 
       cmdBuffer = DxvkCmdBuffer::ExecBuffer;
@@ -3879,10 +3882,14 @@ namespace dxvk {
         str::format("Clear view (", dstName ? dstName : "unknown", ")").c_str()));
     }
 
-    addImageLayoutTransition(*imageView->image(), imageView->imageSubresources(),
-      VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
-      imageView->image()->isFullSubresource(vk::pickSubresourceLayers(imageView->imageSubresources(), 0), extent));
-    flushImageLayoutTransitions(cmdBuffer);
+    // Avoid inserting useless barriers if the image is already in the correct layout
+    if (imageView->image()->info().layout != VK_IMAGE_LAYOUT_GENERAL
+     || !imageView->image()->isInitialized(imageView->imageSubresources())) {
+      addImageLayoutTransition(*imageView->image(), imageView->imageSubresources(),
+        VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_WRITE_BIT,
+        imageView->image()->isFullSubresource(vk::pickSubresourceLayers(imageView->imageSubresources(), 0), extent));
+      flushImageLayoutTransitions(cmdBuffer);
+    }
 
     // Query pipeline objects to use for this clear operation
     DxvkMetaClearPipeline pipeInfo = m_common->metaClear().getClearImagePipeline(

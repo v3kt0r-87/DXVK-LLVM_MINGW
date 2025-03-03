@@ -306,6 +306,11 @@ namespace dxvk {
     if (!m_deviceExtensions.supports(devExtensions.extPageableDeviceLocalMemory.name()))
       devExtensions.amdMemoryOverallocationBehaviour.setMode(DxvkExtMode::Optional);
 
+    // Proprietary qcom is broken and will fail device creation if we
+    // enable EXT_multi_draw, despite advertizing it as supported.
+    if (m_deviceInfo.vk12.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY)
+      devExtensions.extMultiDraw.setMode(DxvkExtMode::Disabled);
+
     DxvkNameSet extensionsEnabled;
 
     if (!m_deviceExtensions.enableExtensions(
@@ -347,6 +352,10 @@ namespace dxvk {
 
     // Required for proper GPU synchronization
     enabledFeatures.vk12.timelineSemaphore = VK_TRUE;
+
+    // Used for better constant array packing in some cases
+    enabledFeatures.vk12.uniformBufferStandardLayout =
+      m_deviceFeatures.vk12.uniformBufferStandardLayout;
 
     // Only enable the base image robustness feature if robustness 2 isn't
     // supported, since this is only a subset of what we actually want.
@@ -401,8 +410,10 @@ namespace dxvk {
     }
 
     // Enable multi-draw for draw batching
-    enabledFeatures.extMultiDraw.multiDraw =
-      m_deviceFeatures.extMultiDraw.multiDraw;
+    if (devExtensions.extMultiDraw) {
+      enabledFeatures.extMultiDraw.multiDraw =
+        m_deviceFeatures.extMultiDraw.multiDraw;
+    }
 
     // Enable memory priority and pageable memory if supported
     // to improve driver-side memory management

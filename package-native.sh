@@ -14,7 +14,7 @@ install_llvm_mingw() {
    sudo apt install glslang-tools  glslang-dev -y
 
     # LLVM MinGW Setup
-    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-mingw-20.0.1.0-RC2/llvm-mingw-20.0.1.0-RC2.zip"
+    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-mingw-20.0.1.0-RC3/llvm-mingw.zip"
     LLVM_MINGW_PATH="$(pwd)/llvm-mingw"
 
     echo "Checking for LLVM MinGW..."

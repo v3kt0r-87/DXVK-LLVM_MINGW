@@ -5297,7 +5297,6 @@ namespace dxvk {
 
       m_flags.set(
         DxvkContextFlag::GpRenderPassBound,
-        DxvkContextFlag::GpDirtyPipeline,
         DxvkContextFlag::GpDirtyPipelineState,
         DxvkContextFlag::GpDirtyVertexBuffers,
         DxvkContextFlag::GpDirtyIndexBuffer,
@@ -6856,7 +6855,9 @@ namespace dxvk {
         this->spillRenderPass(true);
     }
 
-    if (m_flags.test(DxvkContextFlag::GpRenderPassSideEffects)) {
+    if (m_flags.test(DxvkContextFlag::GpRenderPassSideEffects)
+     || m_state.gp.flags.any(DxvkGraphicsPipelineFlag::HasStorageDescriptors,
+                             DxvkGraphicsPipelineFlag::HasTransformFeedback)) {
       // If either the current pipeline has side effects or if there are pending
       // writes from previous draws, check for hazards. This also tracks any
       // resources written for the first time, but does not emit any barriers
@@ -6864,6 +6865,9 @@ namespace dxvk {
       // implicitly dirties all state for which we need to track resource access.
       if (this->checkGraphicsHazards<Indexed, Indirect>())
         this->spillRenderPass(true);
+
+      // The render pass flag gets reset when the render pass ends, so set it late
+      m_flags.set(DxvkContextFlag::GpRenderPassSideEffects);
     }
 
     // Start the render pass. This must happen before any render state

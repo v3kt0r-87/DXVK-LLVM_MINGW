@@ -871,7 +871,7 @@ namespace dxvk {
     binding.viewType = VK_IMAGE_VIEW_TYPE_MAX_ENUM;
     binding.access = VK_ACCESS_UNIFORM_READ_BIT;
     binding.resourceBinding = bindingId;
-    binding.uboSet = VK_TRUE;
+    binding.uboSet = true;
     m_bindings.push_back(binding);
   }
 
@@ -1080,6 +1080,7 @@ namespace dxvk {
     DxvkBindingInfo binding = { };
     binding.viewType = typeInfo.vtype;
     binding.resourceBinding = bindingId;
+    binding.isMultisampled = typeInfo.ms;
 
     if (isUav) {
       binding.descriptorType = resourceType == DxbcResourceDim::Buffer
@@ -6898,15 +6899,15 @@ namespace dxvk {
   
   
   void DxbcCompiler::emitPointSizeStore() {
-    if (!m_pointSizeOut) {
-      m_pointSizeOut = emitNewBuiltinVariable(DxbcRegisterInfo {
+    if (m_moduleInfo.options.needsPointSizeExport) {
+      uint32_t pointSizeId = emitNewBuiltinVariable(DxbcRegisterInfo {
         { DxbcScalarType::Float32, 1, 0 },
         spv::StorageClassOutput },
         spv::BuiltInPointSize,
         "point_size");
-    }
 
-    m_module.opStore(m_pointSizeOut, m_module.constf32(1.0f));
+      m_module.opStore(pointSizeId, m_module.constf32(1.0f));
+    }
   }
 
 

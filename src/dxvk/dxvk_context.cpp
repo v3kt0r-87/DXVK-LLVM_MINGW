@@ -1939,98 +1939,99 @@ namespace dxvk {
     const Rc<DxvkImage>&            dstImage,
     const Rc<DxvkImage>&            srcImage,
     const VkImageResolve&           region,
-          VkFormat                  format) {
-    if (format == VK_FORMAT_UNDEFINED)
-      format = srcImage->info().format;
-
-    if (resolveImageInline(dstImage, srcImage, region, format, VK_RESOLVE_MODE_AVERAGE_BIT, VK_RESOLVE_MODE_NONE))
-      return;
-
-    this->spillRenderPass(true);
-    this->prepareImage(dstImage, vk::makeSubresourceRange(region.dstSubresource));
-    this->prepareImage(srcImage, vk::makeSubresourceRange(region.srcSubresource));
-
+          VkFormat                  format,
+          VkResolveModeFlagBits     mode,
+          VkResolveModeFlagBits     stencilMode) {
     auto formatInfo = lookupFormatInfo(format);
 
-    bool useRp = srcImage->info().format != format
-              || dstImage->info().format != format;
+    // Normalize resolve modes to available subresources
+    VkImageAspectFlags aspects = region.srcSubresource.aspectMask
+                               & region.dstSubresource.aspectMask;
 
-    useRp |= (srcImage->info().usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)
-          && (dstImage->info().usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
-
-    if (useRp) {
-      // Work out resolve mode based on format properties. For color images,
-      // we must use AVERAGE unless the resolve uses an integer format.
-      VkResolveModeFlagBits mode = VK_RESOLVE_MODE_AVERAGE_BIT;
-
-      if (formatInfo->flags.any(DxvkFormatFlag::SampledSInt, DxvkFormatFlag::SampledUInt)
-      || (formatInfo->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)))
-        mode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
-
-      this->resolveImageRp(dstImage, srcImage, region,
-        format, mode, mode);
-    } else {
-      this->resolveImageHw(dstImage, srcImage, region);
-    }
-  }
-
-
-  void DxvkContext::resolveDepthStencilImage(
-    const Rc<DxvkImage>&            dstImage,
-    const Rc<DxvkImage>&            srcImage,
-    const VkImageResolve&           region,
-          VkResolveModeFlagBits     depthMode,
-          VkResolveModeFlagBits     stencilMode) {
-    // Technically legal, but no-op
-    if (!depthMode && !stencilMode)
-      return;
-
-    // Subsequent functions expect stencil mode to be None
-    // if either of the images have no stencil aspect
-    if (!(region.dstSubresource.aspectMask
-        & region.srcSubresource.aspectMask
-        & VK_IMAGE_ASPECT_STENCIL_BIT))
+    if (!(aspects & VK_IMAGE_ASPECT_STENCIL_BIT))
       stencilMode = VK_RESOLVE_MODE_NONE;
 
-    // We can only use the depth-stencil resolve path if we are resolving
-    // a full subresource and both images have the same format.
-    bool useFb = !dstImage->isFullSubresource(region.dstSubresource, region.extent)
-              || !srcImage->isFullSubresource(region.srcSubresource, region.extent)
-              || dstImage->info().format != srcImage->info().format;
-    
-    if (!useFb) {
-      // Additionally, the given mode combination must be supported.
+    // No-op, but legal
+    if (!mode && !stencilMode)
+      return;
+
+    // Check whether the given resolve modes are supported for render pass resolves
+    bool useFb = false;
+
+    if (formatInfo->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
       const auto& properties = m_device->properties().vk12;
 
-      useFb |= (properties.supportedDepthResolveModes   & depthMode)   != depthMode
+      useFb |= (properties.supportedDepthResolveModes   & mode)        != mode
             || (properties.supportedStencilResolveModes & stencilMode) != stencilMode;
-      
-      if (depthMode != stencilMode) {
-        useFb |= (!depthMode || !stencilMode)
+
+      if (mode != stencilMode && (formatInfo->aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+        useFb |= (!mode || !stencilMode)
           ? !properties.independentResolveNone
           : !properties.independentResolve;
       }
+    } else {
+      // For color images, only the default mode is supported
+      useFb |= mode != getDefaultResolveMode(formatInfo);
     }
 
-    // If the source image is shader-readable anyway, we can use the
-    // FB path if it's beneficial on the device we're running on
-    if (m_device->perfHints().preferFbDepthStencilCopy)
-      useFb |= srcImage->info().usage & VK_IMAGE_USAGE_SAMPLED_BIT;
+    // Also fall back to framebuffer path if this is a partial resolve,
+    // or if two depth-stencil images are not format-compatible.
+    if (!useFb) {
+      useFb |= !dstImage->isFullSubresource(region.dstSubresource, region.extent)
+            || !srcImage->isFullSubresource(region.srcSubresource, region.extent);
 
-    // Only try to inline the resolve if we don't need to use the fb path
-    if (!useFb && resolveImageInline(dstImage, srcImage, region, dstImage->info().format, depthMode, stencilMode))
+      if (formatInfo->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+        useFb |= dstImage->info().format != srcImage->info().format;
+    }
+
+    // Ensure that we can actually use the destination image as an attachment
+    DxvkImageUsageInfo dstUsage = { };
+    dstUsage.viewFormatCount = 1;
+    dstUsage.viewFormats = &format;
+
+    if (formatInfo->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+      dstUsage.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+      dstUsage.stages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+      dstUsage.access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    } else {
+      dstUsage.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+      dstUsage.stages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+      dstUsage.access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    }
+
+    // Same for the source image, but check for shader usage
+    // instead in case we need to use that path
+    DxvkImageUsageInfo srcUsage = dstUsage;
+
+    if (useFb) {
+      srcUsage.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+      srcUsage.stages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+      srcUsage.access = VK_ACCESS_SHADER_READ_BIT;
+    }
+
+    bool useHw = !ensureImageCompatibility(dstImage, dstUsage)
+              || !ensureImageCompatibility(srcImage, srcUsage);
+
+    // If possible, fold resolve into active render pass
+    if (!useHw && !useFb && resolveImageInline(dstImage, srcImage, region, format, mode, stencilMode))
       return;
 
     this->spillRenderPass(true);
     this->prepareImage(dstImage, vk::makeSubresourceRange(region.dstSubresource));
     this->prepareImage(srcImage, vk::makeSubresourceRange(region.srcSubresource));
 
-    if (useFb) {
-      this->resolveImageFb(dstImage, srcImage, region,
-        VK_FORMAT_UNDEFINED, depthMode, stencilMode);
+    if (unlikely(useHw)) {
+      // Only used as a fallback if we can't use the images any other way,
+      // format and resolve mode might not match what the app requests.
+      this->resolveImageHw(dstImage, srcImage, region);
+    } else if (unlikely(useFb)) {
+      // Only used for weird resolve modes or partial resolves
+      this->resolveImageFb(dstImage, srcImage,
+        region, format, mode, stencilMode);
     } else {
-      this->resolveImageRp(dstImage, srcImage, region,
-        VK_FORMAT_UNDEFINED, depthMode, stencilMode);
+      // Default path, use a resolve attachment
+      this->resolveImageRp(dstImage, srcImage,
+        region, format, mode, stencilMode);
     }
   }
 
@@ -2470,6 +2471,9 @@ namespace dxvk {
       auto srcSubresource = attachment.view->imageSubresources();
       auto dstSubresource = resolve.imageView->imageSubresources();
 
+      prepareImage(attachment.view->image(), srcSubresource);
+      prepareImage(resolve.imageView->image(), dstSubresource);
+
       while (resolve.layerMask) {
         uint32_t layerIndex = bit::tzcnt(resolve.layerMask);
         uint32_t layerCount = bit::tzcnt(~(resolve.layerMask >> layerIndex));
@@ -2485,13 +2489,8 @@ namespace dxvk {
         region.srcSubresource.layerCount = layerCount;
         region.extent = resolve.imageView->mipLevelExtent(0u);
 
-        if (dstSubresource.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
-          resolveDepthStencilImage(resolve.imageView->image(),
-            attachment.view->image(), region, resolve.depthMode, resolve.stencilMode);
-        } else {
-          resolveImage(resolve.imageView->image(), attachment.view->image(),
-            region, attachment.view->info().format);
-        }
+        resolveImageRp(resolve.imageView->image(), attachment.view->image(),
+          region, attachment.view->info().format, resolve.depthMode, resolve.stencilMode);
 
         resolve.layerMask &= ~0u << (layerIndex + layerCount);
       }
@@ -2580,16 +2579,15 @@ namespace dxvk {
 
   void DxvkContext::setViewports(
           uint32_t            viewportCount,
-    const VkViewport*         viewports,
-    const VkRect2D*           scissorRects) {
+    const DxvkViewport*       viewports) {
     for (uint32_t i = 0; i < viewportCount; i++) {
-      m_state.vp.viewports[i] = viewports[i];
-      m_state.vp.scissorRects[i] = scissorRects[i];
-      
+      m_state.vp.viewports[i] = viewports[i].viewport;
+      m_state.vp.scissorRects[i] = viewports[i].scissor;
+
       // Vulkan viewports are not allowed to have a width or
       // height of zero, so we fall back to a dummy viewport
       // and instead set an empty scissor rect, which is legal.
-      if (viewports[i].width == 0.0f || viewports[i].height == 0.0f) {
+      if (viewports[i].viewport.width <= 0.0f || viewports[i].viewport.height == 0.0f) {
         m_state.vp.viewports[i] = VkViewport {
           0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f };
         m_state.vp.scissorRects[i] = VkRect2D {
@@ -2597,7 +2595,7 @@ namespace dxvk {
           VkExtent2D { 0, 0 } };
       }
     }
-    
+
     m_state.vp.viewportCount = viewportCount;
     m_flags.set(DxvkContextFlag::GpDirtyViewport);
   }
@@ -4745,23 +4743,6 @@ namespace dxvk {
 
     bool isDepthStencil = (dstImage->formatInfo()->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
 
-    DxvkImageUsageInfo usageInfo = { };
-    usageInfo.usage = isDepthStencil
-      ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    if (format) {
-      usageInfo.viewFormatCount = 1u;
-      usageInfo.viewFormats = &format;
-    }
-
-    if (!ensureImageCompatibility(dstImage, usageInfo)
-     || !ensureImageCompatibility(srcImage, usageInfo)) {
-      Logger::err(str::format("DxvkContext: resolveImageRp: Unsupported images:"
-        "\n  dst format: ", dstImage->info().format,
-        "\n  src format: ", srcImage->info().format));
-    }
-
     flushPendingAccesses(*dstImage, dstSubresourceRange, DxvkAccess::Write);
     flushPendingAccesses(*srcImage, srcSubresourceRange, DxvkAccess::Read);
 
@@ -4866,33 +4847,6 @@ namespace dxvk {
 
     auto dstSubresourceRange = vk::makeSubresourceRange(region.dstSubresource);
     auto srcSubresourceRange = vk::makeSubresourceRange(region.srcSubresource);
-
-    // Ensure we can access the destination image for rendering,
-    // and the source image for reading within the shader.
-    DxvkImageUsageInfo dstUsage = { };
-    dstUsage.usage = (dstImage->formatInfo()->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
-      ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
-      : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    DxvkImageUsageInfo srcUsage = { };
-    srcUsage.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
-
-    if (format) {
-      dstUsage.viewFormatCount = 1u;
-      dstUsage.viewFormats = &format;
-
-      srcUsage.viewFormatCount = 1u;
-      srcUsage.viewFormats = &format;
-    }
-
-    if (!ensureImageCompatibility(dstImage, dstUsage)
-     || !ensureImageCompatibility(srcImage, srcUsage)) {
-      Logger::err(str::format("DxvkContext: resolveImageFb: Unsupported images:",
-        "\n  dst format:  ", dstImage->info().format,
-        "\n  src format:  ", srcImage->info().format,
-        "\n  view format: ", format));
-      return;
-    }
 
     flushPendingAccesses(*dstImage, dstSubresourceRange, DxvkAccess::Write);
     flushPendingAccesses(*srcImage, srcSubresourceRange, DxvkAccess::Read);
@@ -6745,8 +6699,25 @@ namespace dxvk {
     if (unlikely(m_flags.test(DxvkContextFlag::GpDirtyViewport))) {
       m_flags.clr(DxvkContextFlag::GpDirtyViewport);
 
+      // Clamp scissor against rendering area. Not doing so is technically
+      // out of spec, even if this doesn't get validated. This also solves
+      // problems with potentially invalid scissor rects.
+      std::array<VkRect2D, DxvkLimits::MaxNumViewports> clampedScissors;
+      DxvkFramebufferSize renderSize = m_state.om.framebufferInfo.size();
+
+      for (uint32_t i = 0; i < m_state.vp.viewportCount; i++) {
+        const auto& scissor = m_state.vp.scissorRects[i];
+
+        clampedScissors[i].offset = VkOffset2D {
+          std::clamp<int32_t>(scissor.offset.x, 0, renderSize.width),
+          std::clamp<int32_t>(scissor.offset.y, 0, renderSize.height) };
+        clampedScissors[i].extent = VkExtent2D {
+          uint32_t(std::clamp<int32_t>(scissor.offset.x + scissor.extent.width,  clampedScissors[i].offset.x, renderSize.width)  - clampedScissors[i].offset.x),
+          uint32_t(std::clamp<int32_t>(scissor.offset.y + scissor.extent.height, clampedScissors[i].offset.y, renderSize.height) - clampedScissors[i].offset.y) };
+      }
+
       m_cmd->cmdSetViewport(m_state.vp.viewportCount, m_state.vp.viewports.data());
-      m_cmd->cmdSetScissor(m_state.vp.viewportCount, m_state.vp.scissorRects.data());
+      m_cmd->cmdSetScissor(m_state.vp.viewportCount, clampedScissors.data());
     }
 
     if (unlikely(m_flags.all(DxvkContextFlag::GpDirtyDepthStencilState,
@@ -7776,18 +7747,18 @@ namespace dxvk {
 
       // Always do a SAMPLE_ZERO resolve here since that's less expensive and closer to what
       // happens on native AMD anyway. Need to use a shader in case we are dealing with a
-      // non-integer color image since render pass resolves only support AVERAGE.
-      auto formatInfo = lookupFormatInfo(op.resolveFormat);
-
-      bool useRp = (formatInfo->flags.any(DxvkFormatFlag::SampledSInt, DxvkFormatFlag::SampledUInt))
-                || (formatInfo->aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT));
+      // non-integer color image since render pass resolves only support AVERAGE..
+      // We know that the source image is shader readable and that the resolve image can be
+      // rendered to, so reduce the image compatibility checks to a minimum here.
+      bool useRp = (getDefaultResolveMode(op.resolveFormat) == VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) &&
+        (op.inputImage->info().usage & (VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT));
 
       if (useRp) {
         resolveImageRp(op.resolveImage, op.inputImage, op.resolveRegion,
           op.resolveFormat, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
       } else {
         resolveImageFb(op.resolveImage, op.inputImage, op.resolveRegion,
-          op.resolveFormat, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, VK_RESOLVE_MODE_NONE);
+          op.resolveFormat, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, VK_RESOLVE_MODE_SAMPLE_ZERO_BIT);
       }
     }
   }

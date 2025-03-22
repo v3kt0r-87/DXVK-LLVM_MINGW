@@ -4537,7 +4537,9 @@ namespace dxvk {
       return false;
 
     auto view = dstImage->createView(viewInfo);
-    this->deferClear(view, srcSubresource.aspectMask, clear->clearValue);
+
+    prepareImage(dstImage, vk::makeSubresourceRange(dstSubresource));
+    deferClear(view, srcSubresource.aspectMask, clear->clearValue);
     return true;
   }
 
@@ -4822,7 +4824,7 @@ namespace dxvk {
     attachment.resolveImageView = views.dstView->handle();
     attachment.resolveImageLayout = dstLayout;
     attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_NONE;
 
     VkRenderingAttachmentInfo stencilAttachment = attachment;
     stencilAttachment.resolveMode = stencilMode;
@@ -5100,6 +5102,7 @@ namespace dxvk {
     if (isDepthStencil)
       key.aspects = dstImage->formatInfo()->aspectMask;
 
+    prepareImage(dstImage, vk::makeSubresourceRange(region.dstSubresource));
     deferClear(dstImage->createView(key), region.dstSubresource.aspectMask, clear->clearValue);
     return true;
   }
@@ -5233,12 +5236,8 @@ namespace dxvk {
 
     resolve.imageView = dstView;
     resolve.layerMask |= 1u << relativeLayer;
-
-    if (region.dstSubresource.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT)
-      resolve.depthMode = depthMode;
-
-    if (region.dstSubresource.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT)
-      resolve.stencilMode = stencilMode;
+    resolve.depthMode = depthMode;
+    resolve.stencilMode = stencilMode;
 
     // Ensure resolves get flushed before the next draw
     m_flags.set(DxvkContextFlag::GpRenderPassNeedsFlush);
@@ -5598,34 +5597,47 @@ namespace dxvk {
 
     VkFormat depthStencilFormat = VK_FORMAT_UNDEFINED;
     VkImageAspectFlags depthStencilAspects = 0;
+    VkImageAspectFlags depthStencilWritable = 0;
 
     auto& depthInfo = m_state.om.renderingInfo.depth;
     depthInfo = { VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO };
 
-    if (framebufferInfo.getDepthTarget().view != nullptr) {
-      const auto& depthTarget = framebufferInfo.getDepthTarget();
+    const auto& depthTarget = framebufferInfo.getDepthTarget();
+
+    if (depthTarget.view) {
       depthStencilFormat = depthTarget.view->info().format;
       depthStencilAspects = depthTarget.view->info().aspects;
+      depthStencilWritable = vk::getWritableAspectsForLayout(depthTarget.layout);
+
+      if (!m_device->properties().khrMaintenance7.separateDepthStencilAttachmentAccess && depthStencilWritable)
+        depthStencilWritable = depthStencilAspects;
+
       depthInfo.imageView = depthTarget.view->handle();
       depthInfo.imageLayout = depthTarget.layout;
       depthInfo.loadOp = ops.depthOps.loadOpD;
-      depthInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      depthInfo.storeOp = (depthStencilWritable & VK_IMAGE_ASPECT_DEPTH_BIT)
+        ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_NONE;
 
-      if (ops.depthOps.loadOpD == VK_ATTACHMENT_LOAD_OP_CLEAR)
+      if (ops.depthOps.loadOpD == VK_ATTACHMENT_LOAD_OP_CLEAR) {
         depthInfo.clearValue.depthStencil.depth = ops.depthOps.clearValue.depth;
+        depthInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      }
 
       renderingInheritance.rasterizationSamples = depthTarget.view->image()->info().sampleCount;
     }
-    
+
     auto& stencilInfo = m_state.om.renderingInfo.stencil;
     stencilInfo = depthInfo;
 
-    if (framebufferInfo.getDepthTarget().view != nullptr) {
+    if (depthTarget.view) {
       stencilInfo.loadOp = ops.depthOps.loadOpS;
-      stencilInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      stencilInfo.storeOp = (depthStencilWritable & VK_IMAGE_ASPECT_STENCIL_BIT)
+        ? VK_ATTACHMENT_STORE_OP_STORE : VK_ATTACHMENT_STORE_OP_NONE;
 
-      if (ops.depthOps.loadOpS == VK_ATTACHMENT_LOAD_OP_CLEAR)
+      if (ops.depthOps.loadOpS == VK_ATTACHMENT_LOAD_OP_CLEAR) {
         stencilInfo.clearValue.depthStencil.stencil = ops.depthOps.clearValue.stencil;
+        stencilInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+      }
     }
 
     auto& renderingInfo = m_state.om.renderingInfo.rendering;
@@ -6518,8 +6530,9 @@ namespace dxvk {
     if (!(image->info().usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT)))
       return;
 
-    // Flush clears if there are any since they may affect the image
-    if (!m_deferredClears.empty() && flushClears)
+    // Flush clears if there are any that affect the image. We need
+    // to check all subresources here, not just the ones to be used.
+    if (flushClears && findOverlappingDeferredClear(image, image->getAvailableSubresources()))
       this->spillRenderPass(false);
 
     // All images are in their default layout for suspended passes
@@ -6557,8 +6570,22 @@ namespace dxvk {
     const Rc<DxvkImage>&          image,
     const VkImageSubresourceRange& subresources) {
     for (auto& entry : m_deferredClears) {
-      if ((entry.imageView->image() == image) && ((subresources.aspectMask & entry.clearAspects) == subresources.aspectMask)
+      if ((entry.imageView->image() == image.ptr()) && ((subresources.aspectMask & entry.clearAspects) == subresources.aspectMask)
        && (vk::checkSubresourceRangeSuperset(entry.imageView->imageSubresources(), subresources)))
+        return &entry;
+    }
+
+    return nullptr;
+  }
+
+
+  DxvkDeferredClear* DxvkContext::findOverlappingDeferredClear(
+    const Rc<DxvkImage>&          image,
+    const VkImageSubresourceRange& subresources) {
+    for (auto& entry : m_deferredClears) {
+      if ((entry.imageView->image() == image.ptr())
+       && ((entry.clearAspects | entry.discardAspects) | subresources.aspectMask)
+       && (vk::checkSubresourceRangeOverlap(entry.imageView->imageSubresources(), subresources)))
         return &entry;
     }
 

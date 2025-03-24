@@ -153,6 +153,9 @@ namespace dxvk {
       m_endLatencyTracking = false;
     }
 
+    // If we have a zero buffer, see if we can get rid of it
+    freeZeroBuffer();
+
     this->beginRecording(
       m_device->createCommandList());
   }
@@ -1034,6 +1037,16 @@ namespace dxvk {
     const Rc<DxvkBuffer>&           buffer) {
     auto dstSlice = buffer->getSliceHandle();
 
+    // If the buffer is suballocated, clear the entire allocated
+    // region, which is guaranteed to have a nicely aligned size
+    if (!buffer->storage()->flags().test(DxvkAllocationFlag::OwnsBuffer)) {
+      auto bufferInfo = buffer->storage()->getBufferInfo();
+
+      dstSlice.handle = bufferInfo.buffer;
+      dstSlice.offset = bufferInfo.offset;
+      dstSlice.length = bufferInfo.size;
+    }
+
     // Buffer size may be misaligned, in which case we have
     // to use a plain buffer copy to fill the last few bytes.
     constexpr VkDeviceSize MinCopyAndFillSize = 1u << 20;
@@ -1078,8 +1091,9 @@ namespace dxvk {
 
   void DxvkContext::initImage(
     const Rc<DxvkImage>&            image,
-    const VkImageSubresourceRange&  subresources,
           VkImageLayout             initialLayout) {
+    VkImageSubresourceRange subresources = image->getAvailableSubresources();
+
     if (initialLayout == VK_IMAGE_LAYOUT_PREINITIALIZED) {
       accessImage(DxvkCmdBuffer::InitBarriers,
         *image, subresources, initialLayout,
@@ -1087,15 +1101,49 @@ namespace dxvk {
 
       m_cmd->track(image, DxvkAccess::None);
     } else {
-      VkImageLayout clearLayout = image->pickLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-      addImageInitTransition(*image, subresources, clearLayout,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-
       auto formatInfo = image->formatInfo();
+      auto bufferInfo = image->storage()->getBufferInfo();
 
-      if (formatInfo->flags.any(DxvkFormatFlag::BlockCompressed, DxvkFormatFlag::MultiPlane)) {
-        // We're copying from a sparse buffer, use the transfer queue
+      if (!formatInfo->flags.any(DxvkFormatFlag::BlockCompressed, DxvkFormatFlag::MultiPlane)) {
+        // Clear commands can only happen on the graphics queue
+        VkImageLayout clearLayout = image->pickLayout(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+        addImageInitTransition(*image, subresources, clearLayout,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        flushImageLayoutTransitions(DxvkCmdBuffer::InitBuffer);
+
+        if (subresources.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
+          VkClearDepthStencilValue value = { };
+
+          m_cmd->cmdClearDepthStencilImage(DxvkCmdBuffer::InitBuffer,
+            image->handle(), clearLayout, &value, 1, &subresources);
+        } else {
+          VkClearColorValue value = { };
+
+          m_cmd->cmdClearColorImage(DxvkCmdBuffer::InitBuffer,
+            image->handle(), clearLayout, &value, 1, &subresources);
+        }
+
+        accessImage(DxvkCmdBuffer::InitBuffer, *image, subresources, clearLayout,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, DxvkAccessOp::None);
+      } else if (bufferInfo.buffer) {
+        // If the image allocation has a buffer, use that to clear the backing storage
+        // to zero. There is no strict guarantee that the image contents read zero, but
+        // in practice this should be good enough and avoids having to create a very
+        // large zero buffer in some cases.
+        m_cmd->cmdFillBuffer(DxvkCmdBuffer::SdmaBuffer,
+          bufferInfo.buffer, bufferInfo.offset, bufferInfo.size, 0u);
+
+        accessMemory(DxvkCmdBuffer::SdmaBuffer,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE);
+
+        accessImage(DxvkCmdBuffer::InitBarriers, *image, subresources, VK_IMAGE_LAYOUT_UNDEFINED,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE, DxvkAccessOp::None);
+      } else {
+        // We're copying from a buffer, use the transfer queue
+        addImageInitTransition(*image, subresources, VK_IMAGE_LAYOUT_GENERAL,
+          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
         flushImageLayoutTransitions(DxvkCmdBuffer::SdmaBuffer);
 
         for (auto aspects = formatInfo->aspectMask; aspects; ) {
@@ -1139,7 +1187,7 @@ namespace dxvk {
               VkCopyBufferToImageInfo2 copyInfo = { VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2 };
               copyInfo.srcBuffer = zeroSlice.handle;
               copyInfo.dstImage = image->handle();
-              copyInfo.dstImageLayout = clearLayout;
+              copyInfo.dstImageLayout = VK_IMAGE_LAYOUT_GENERAL;
               copyInfo.regionCount = 1;
               copyInfo.pRegions = &copyRegion;
 
@@ -1148,26 +1196,8 @@ namespace dxvk {
           }
         }
 
-        accessImageTransfer(*image, subresources, clearLayout,
+        accessImageTransfer(*image, subresources, VK_IMAGE_LAYOUT_GENERAL,
           VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT);
-      } else {
-        // Clear commands can only happen on the graphics queue
-        flushImageLayoutTransitions(DxvkCmdBuffer::InitBuffer);
-
-        if (subresources.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
-          VkClearDepthStencilValue value = { };
-
-          m_cmd->cmdClearDepthStencilImage(DxvkCmdBuffer::InitBuffer,
-            image->handle(), clearLayout, &value, 1, &subresources);
-        } else {
-          VkClearColorValue value = { };
-
-          m_cmd->cmdClearColorImage(DxvkCmdBuffer::InitBuffer,
-            image->handle(), clearLayout, &value, 1, &subresources);
-        }
-
-        accessImage(DxvkCmdBuffer::InitBuffer, *image, subresources, clearLayout,
-          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, DxvkAccessOp::None);
       }
 
       m_cmd->track(image, DxvkAccess::Write);
@@ -7723,61 +7753,44 @@ namespace dxvk {
                     | VK_ACCESS_TRANSFER_READ_BIT;
     bufInfo.debugName = "Zero buffer";
 
-    // If supported by the device, create a large sparse buffer and keep it unmapped
-    // in order to avoid having to allocate and clear any actual memory. Some specific
-    // older AMD hardware seems to have some trouble with this, use the minimum subgroup
-    // size to disable the sparse path on anything that predates RDNA1.
-    bool noSparseWorkaroundAmd = m_device->properties().core.properties.vendorID == uint32_t(DxvkGpuVendor::Amd)
-                              && m_device->properties().vk13.minSubgroupSize == 64u;
-
-    if (m_device->features().core.features.sparseBinding
-     && m_device->features().core.features.sparseResidencyBuffer
-     && m_device->properties().core.properties.sparseProperties.residencyNonResidentStrict
-     && !noSparseWorkaroundAmd) {
-      bufInfo.size = align<VkDeviceSize>(size, DxvkMemoryPool::MaxChunkSize);
-      bufInfo.flags |= VK_BUFFER_CREATE_SPARSE_BINDING_BIT | VK_BUFFER_CREATE_SPARSE_RESIDENCY_BIT;
-    }
-
     m_zeroBuffer = m_device->createBuffer(bufInfo,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
     DxvkBufferSliceHandle slice = m_zeroBuffer->getSliceHandle();
 
-    if (bufInfo.flags & VK_BUFFER_CREATE_SPARSE_BINDING_BIT) {
-      DxvkSparseBufferBindKey key = { };
-      key.buffer = slice.handle;
-      key.offset = slice.offset;
-      key.size = slice.length;
+    // FillBuffer is allowed even on transfer queues. Execute it on the barrier
+    // command buffer to ensure that subsequent transfer commands can see it.
+    m_cmd->cmdFillBuffer(DxvkCmdBuffer::SdmaBarriers,
+      slice.handle, slice.offset, slice.length, 0);
 
-      DxvkResourceMemoryInfo memory = { };
-      memory.size = slice.length;
+    accessMemory(DxvkCmdBuffer::SdmaBarriers,
+      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+      VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
 
-      // We really should have a sparse queue, but if for whatever reason we don't,
-      // just assume that the buffer is mapped to null by default, which seems to
-      // be intended by the spec anyway
-      if (m_device->queues().sparse.queueHandle)
-        m_cmd->bindBufferMemory(key, memory);
-    } else {
-      // FillBuffer is allowed even on transfer queues. Execute it on the barrier
-      // command buffer to ensure that subsequent transfer commands can see it.
-      m_cmd->cmdFillBuffer(DxvkCmdBuffer::SdmaBarriers,
-        slice.handle, slice.offset, slice.length, 0);
-
-      accessMemory(DxvkCmdBuffer::SdmaBarriers,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+    if (m_device->hasDedicatedTransferQueue()) {
+      accessMemory(DxvkCmdBuffer::InitBarriers,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
         VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-
-      if (m_device->hasDedicatedTransferQueue()) {
-        accessMemory(DxvkCmdBuffer::InitBarriers,
-          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_NONE,
-          VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT);
-      }
     }
 
     m_cmd->track(m_zeroBuffer, DxvkAccess::Write);
     return m_zeroBuffer;
   }
-  
+
+
+  void DxvkContext::freeZeroBuffer() {
+    constexpr uint64_t ZeroBufferLifetime = 4096u;
+
+    // Don't free the zero buffer if it is still kept alive by a prior
+    // submission anyway
+    if (!m_zeroBuffer || m_zeroBuffer->isInUse(DxvkAccess::Write))
+      return;
+
+    // Delete zero buffer if it hasn't been actively used in a while
+    if (m_zeroBuffer->getTrackId() + ZeroBufferLifetime < m_trackingId)
+      m_zeroBuffer = nullptr;
+  }
+
 
   void DxvkContext::resizeDescriptorArrays(
           uint32_t                  bindingCount) {

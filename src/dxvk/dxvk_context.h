@@ -934,12 +934,10 @@ namespace dxvk {
      * it to black unless the initial layout is preinitialized.
      * Only safe to call if the image is not in use by the GPU.
      * \param [in] image The image to initialize
-     * \param [in] subresources Image subresources
      * \param [in] initialLayout Initial image layout
      */
     void initImage(
       const Rc<DxvkImage>&            image,
-      const VkImageSubresourceRange&  subresources,
             VkImageLayout             initialLayout);
 
     /**
@@ -1866,6 +1864,8 @@ namespace dxvk {
     
     Rc<DxvkBuffer> createZeroBuffer(
             VkDeviceSize              size);
+
+    void freeZeroBuffer();
 
     void resizeDescriptorArrays(
             uint32_t                  bindingCount);

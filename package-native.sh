@@ -13,7 +13,7 @@ install_llvm_mingw() {
 
 
     # LLVM MinGW Setup
-    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-mingw-20.0.1.0/llvm-mingw.zip"
+    LLVM_MINGW_URL="https://github.com/v3kt0r-87/Clang-Stable/releases/download/llvm-mingw-20.0.1.1/llvm-mingw.zip"
     LLVM_MINGW_PATH="$(pwd)/llvm-mingw"
 
     echo "Checking for LLVM MinGW..."

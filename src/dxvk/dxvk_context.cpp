@@ -2311,17 +2311,52 @@ namespace dxvk {
   }
 
 
+  void DxvkContext::hoistInlineClear(
+          DxvkDeferredClear&        clear,
+          VkRenderingAttachmentInfo& attachment,
+          VkImageAspectFlagBits     aspect) {
+    if (clear.clearAspects & aspect) {
+      attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+      attachment.clearValue = clear.clearValue;
+
+      clear.clearAspects &= ~aspect;
+    } else if (clear.discardAspects & aspect) {
+      attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+
+      clear.discardAspects &= ~aspect;
+    }
+  }
+
+
   void DxvkContext::flushClearsInline() {
     small_vector<VkClearAttachment, MaxNumRenderTargets + 1u> attachments;
 
-    for (const auto& clear : m_deferredClears) {
-      // Ignore pure discards, we can't do anything useful with
+    for (auto& clear : m_deferredClears) {
+      // If we end up here, the image is guaranteed to be bound and writable.
+      int32_t attachmentIndex = m_state.om.framebufferInfo.findAttachment(clear.imageView);
+
+      if (m_flags.test(DxvkContextFlag::GpRenderPassSecondaryCmd)) {
+        // If the attachment hasn't been used for rendering yet, and if we're inside
+        // a render pass using secondary command buffers, we can fold the clear or
+        // discard into the render pass itself.
+        if ((clear.clearAspects | clear.discardAspects) & VK_IMAGE_ASPECT_COLOR_BIT) {
+          uint32_t colorIndex = m_state.om.framebufferInfo.getColorAttachmentIndex(attachmentIndex);
+
+          if (m_state.om.attachmentMask.getColorAccess(colorIndex) == DxvkAccess::None)
+            hoistInlineClear(clear, m_state.om.renderingInfo.color[colorIndex], VK_IMAGE_ASPECT_COLOR_BIT);
+        } else {
+          if (m_state.om.attachmentMask.getDepthAccess() == DxvkAccess::None)
+            hoistInlineClear(clear, m_state.om.renderingInfo.depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+
+          if (m_state.om.attachmentMask.getStencilAccess() == DxvkAccess::None)
+            hoistInlineClear(clear, m_state.om.renderingInfo.stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
+        }
+      }
+
+      // Ignore discards here, we can't do anything useful with
       // those without interrupting the render pass again.
       if (!clear.clearAspects)
         continue;
-
-      // If we end up here, the image is guaranteed to be bound.
-      int32_t attachmentIndex = m_state.om.framebufferInfo.findAttachment(clear.imageView);
 
       auto& entry = attachments.emplace_back();
       entry.aspectMask = clear.clearAspects;
@@ -2518,16 +2553,12 @@ namespace dxvk {
         color.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
         color.resolveImageView = resolve.imageView->handle();
         color.resolveImageLayout = newLayout;
-
-        m_state.om.attachmentMask.trackColorRead(index);
       } else {
         if (resolve.depthMode) {
           auto& depth = m_state.om.renderingInfo.depth;
           depth.resolveMode = resolve.depthMode;
           depth.resolveImageView = resolve.imageView->handle();
           depth.resolveImageLayout = newLayout;
-
-          m_state.om.attachmentMask.trackDepthRead();
         }
 
         if (resolve.stencilMode) {
@@ -2535,8 +2566,6 @@ namespace dxvk {
           stencil.resolveMode = resolve.stencilMode;
           stencil.resolveImageView = resolve.imageView->handle();
           stencil.resolveImageLayout = newLayout;
-
-          m_state.om.attachmentMask.trackStencilRead();
         }
       }
 
@@ -2601,9 +2630,34 @@ namespace dxvk {
   void DxvkContext::finalizeLoadStoreOps() {
     auto& renderingInfo = m_state.om.renderingInfo;
 
+    // Track attachment access for render pass clears and resolves
+    for (uint32_t i = 0; i < renderingInfo.rendering.colorAttachmentCount; i++) {
+      if (renderingInfo.color[i].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR)
+        m_state.om.attachmentMask.trackColorWrite(i);
+      if (renderingInfo.color[i].resolveImageView && renderingInfo.color[i].resolveMode)
+        m_state.om.attachmentMask.trackColorRead(i);
+    }
+
+    if (renderingInfo.rendering.pDepthAttachment) {
+      if (renderingInfo.depth.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR)
+        m_state.om.attachmentMask.trackDepthWrite();
+      if (renderingInfo.depth.resolveImageView && renderingInfo.depth.resolveMode)
+        m_state.om.attachmentMask.trackDepthRead();
+    }
+
+    if (renderingInfo.rendering.pStencilAttachment) {
+      if (renderingInfo.stencil.loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR)
+        m_state.om.attachmentMask.trackStencilWrite();
+      if (renderingInfo.stencil.resolveImageView && renderingInfo.stencil.resolveMode)
+        m_state.om.attachmentMask.trackStencilRead();
+    }
+
+    // If we don't have maintenance7 support, we need to pretend that accessing
+    // one of depth or stencil also accesses the other aspect in the same way
     if (!m_device->properties().khrMaintenance7.separateDepthStencilAttachmentAccess)
       m_state.om.attachmentMask.unifyDepthStencilAccess();
 
+    // Use attachment access info to set the final load/store ops
     for (uint32_t i = 0; i < renderingInfo.rendering.colorAttachmentCount; i++) {
       adjustAttachmentLoadStoreOps(renderingInfo.color[i],
         m_state.om.attachmentMask.getColorAccess(i));
@@ -4227,6 +4281,17 @@ namespace dxvk {
       // Make sure the render pass is active so
       // that we can actually perform the clear
       this->startRenderPass();
+
+      if (aspect & VK_IMAGE_ASPECT_COLOR_BIT) {
+        uint32_t colorIndex = m_state.om.framebufferInfo.getColorAttachmentIndex(attachmentIndex);
+        m_state.om.attachmentMask.trackColorWrite(colorIndex);
+      }
+
+      if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT)
+        m_state.om.attachmentMask.trackDepthWrite();
+
+      if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT)
+        m_state.om.attachmentMask.trackStencilWrite();
     }
 
     // Perform the actual clear operation
@@ -5771,8 +5836,6 @@ namespace dxvk {
             clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             clear.clearValue.color = ops.colorOps[i].clearValue;
           }
-
-          m_state.om.attachmentMask.trackColorWrite(i);
         }
 
         colorInfoCount = i + 1;
@@ -5805,9 +5868,6 @@ namespace dxvk {
       if (ops.depthOps.loadOpD == VK_ATTACHMENT_LOAD_OP_CLEAR) {
         depthInfo.clearValue.depthStencil.depth = ops.depthOps.clearValue.depth;
         depthInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-        if (depthStencilAspects & VK_IMAGE_ASPECT_DEPTH_BIT)
-          m_state.om.attachmentMask.trackDepthWrite();
       }
 
       renderingInheritance.rasterizationSamples = depthTarget.view->image()->info().sampleCount;
@@ -5824,9 +5884,6 @@ namespace dxvk {
       if (ops.depthOps.loadOpS == VK_ATTACHMENT_LOAD_OP_CLEAR) {
         stencilInfo.clearValue.depthStencil.stencil = ops.depthOps.clearValue.stencil;
         stencilInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-
-        if (depthStencilAspects & VK_IMAGE_ASPECT_STENCIL_BIT)
-          m_state.om.attachmentMask.trackStencilWrite();
       }
     }
 

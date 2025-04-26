@@ -117,6 +117,45 @@ namespace dxvk {
 
 
 
+  class VideoProcessorView {
+
+  public:
+
+    VideoProcessorView(
+            D3D11Device*            pDevice,
+            ID3D11Resource*         pResource,
+            DxvkImageViewKey        viewInfo);
+
+    ~VideoProcessorView();
+
+    bool IsYCbCr() const {
+      return m_isYCbCr;
+    }
+
+    Rc<DxvkImage> GetImage() const {
+      return GetCommonTexture(m_resource.ptr())->GetImage();
+    }
+
+    std::array<Rc<DxvkImageView>, 2> GetViews() const {
+      return m_views;
+    }
+
+    ID3D11Resource *GetResource() {
+      return m_resource.ref();
+    }
+
+  private:
+
+    Com<ID3D11Resource>                   m_resource;
+    std::array<Rc<DxvkImageView>, 2>      m_views;
+    bool                                  m_isYCbCr = false;
+
+    static bool IsYCbCrFormat(DXGI_FORMAT Format);
+
+  };
+
+
+
   class D3D11VideoProcessorInputView : public D3D11DeviceChild<ID3D11VideoProcessorInputView> {
 
   public:
@@ -138,34 +177,18 @@ namespace dxvk {
     void STDMETHODCALLTYPE GetDesc(
             D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC* pDesc);
 
-    bool IsYCbCr() const {
-      return m_isYCbCr;
-    }
-
-    Rc<DxvkImage> GetImage() const {
-      return GetCommonTexture(m_resource.ptr())->GetImage();
-    }
-
-    VkImageSubresourceLayers GetImageSubresources() const {
-      return m_subresources;
-    }
-
-    std::array<Rc<DxvkImageView>, 2> GetViews() const {
-      return m_views;
+    const VideoProcessorView& GetCommon() const {
+      return m_common;
     }
 
   private:
 
-    Com<ID3D11Resource>                   m_resource;
+    VideoProcessorView                    m_common;
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC m_desc;
-    VkImageSubresourceLayers              m_subresources;
-    std::array<Rc<DxvkImageView>, 2>      m_views;
-    bool                                  m_isYCbCr = false;
 
     D3DDestructionNotifier                m_destructionNotifier;
 
-    static bool IsYCbCrFormat(DXGI_FORMAT Format);
-
+    static DxvkImageViewKey CreateViewInfo(const D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC& Desc);
   };
 
 
@@ -195,14 +218,19 @@ namespace dxvk {
       return m_view;
     }
 
+    const VideoProcessorView& GetCommon() const {
+      return m_common;
+    }
+
   private:
 
-    Com<ID3D11Resource>                     m_resource;
+    VideoProcessorView                      m_common;
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC  m_desc;
     Rc<DxvkImageView>                       m_view;
 
     D3DDestructionNotifier                  m_destructionNotifier;
 
+    static DxvkImageViewKey CreateViewInfo(const D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC& Desc);
   };
 
 
@@ -580,12 +608,19 @@ namespace dxvk {
 
   private:
 
+    enum ExportMode : uint32_t {
+      ExportRGBA = 0,
+      ExportY    = 1,
+      ExportCbCr = 2,
+    };
+
     struct alignas(16) UboData {
       float colorMatrix[3][4];
       float coordMatrix[3][2];
       VkRect2D srcRect;
       float yMin, yMax;
       VkBool32 isPlanar;
+      ExportMode exportMode;
     };
 
     D3D11ImmediateContext*  m_ctx;
@@ -595,7 +630,9 @@ namespace dxvk {
     Rc<DxvkShader>          m_fs;
     Rc<DxvkBuffer>          m_ubo;
 
-    VkExtent2D m_dstExtent = { 0u, 0u };
+    VkExtent2D m_dstExtent  = { 0u, 0u };
+    bool       m_dstIsYCbCr = false;
+    ExportMode m_exportMode = ExportRGBA;
 
     bool m_resourcesCreated = false;
 
@@ -604,7 +641,7 @@ namespace dxvk {
     void ApplyYCbCrMatrix(float pColorMatrix[3][4], bool UseBt709);
 
     void BindOutputView(
-            ID3D11VideoProcessorOutputView* pOutputView);
+            Rc<DxvkImageView> dxvkView);
 
     void BlitStream(
       const D3D11VideoProcessorStreamState* pStreamState,

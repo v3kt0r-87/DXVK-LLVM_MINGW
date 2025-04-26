@@ -173,13 +173,12 @@ namespace dxvk {
 
 
 
-  D3D11VideoProcessorInputView::D3D11VideoProcessorInputView(
+  VideoProcessorView::VideoProcessorView(
           D3D11Device*            pDevice,
           ID3D11Resource*         pResource,
-    const D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC& Desc)
-  : D3D11DeviceChild<ID3D11VideoProcessorInputView>(pDevice),
-    m_resource(pResource), m_desc(Desc),
-    m_destructionNotifier(this) {
+          DxvkImageViewKey        viewInfo)
+  : m_resource(pResource)
+      {
     D3D11_COMMON_RESOURCE_DESC resourceDesc = { };
     GetCommonResourceDesc(pResource, &resourceDesc);
 
@@ -190,28 +189,9 @@ namespace dxvk {
 
     VkImageAspectFlags aspectMask = lookupFormatInfo(formatInfo.Format)->aspectMask;
 
-    DxvkImageViewKey viewInfo;
     viewInfo.format = formatInfo.Format;
-    viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     viewInfo.packedSwizzle = DxvkImageViewKey::packSwizzle(formatInfo.Swizzle);
-
-    switch (m_desc.ViewDimension) {
-      case D3D11_VPIV_DIMENSION_TEXTURE2D:
-        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.mipIndex   = m_desc.Texture2D.MipSlice;
-        viewInfo.mipCount   = 1;
-        viewInfo.layerIndex = m_desc.Texture2D.ArraySlice;
-        viewInfo.layerCount = 1;
-        break;
-
-      case D3D11_VPIV_DIMENSION_UNKNOWN:
-        throw DxvkError("Invalid view dimension");
-    }
-
-    m_subresources.aspectMask = aspectMask;
-    m_subresources.baseArrayLayer = viewInfo.layerIndex;
-    m_subresources.layerCount = viewInfo.layerCount;
-    m_subresources.mipLevel = viewInfo.mipIndex;
+    viewInfo.aspects = aspectMask;
 
     for (uint32_t i = 0; aspectMask && i < m_views.size(); i++) {
       viewInfo.aspects = vk::getNextAspect(aspectMask);
@@ -226,12 +206,12 @@ namespace dxvk {
   }
 
 
-  D3D11VideoProcessorInputView::~D3D11VideoProcessorInputView() {
+  VideoProcessorView::~VideoProcessorView() {
 
   }
 
 
-  bool D3D11VideoProcessorInputView::IsYCbCrFormat(DXGI_FORMAT Format) {
+  bool VideoProcessorView::IsYCbCrFormat(DXGI_FORMAT Format) {
     static const std::array<DXGI_FORMAT, 3> s_formats = {{
       DXGI_FORMAT_NV12,
       DXGI_FORMAT_YUY2,
@@ -239,6 +219,23 @@ namespace dxvk {
     }};
 
     return std::find(s_formats.begin(), s_formats.end(), Format) != s_formats.end();
+  }
+
+
+
+  D3D11VideoProcessorInputView::D3D11VideoProcessorInputView(
+          D3D11Device*            pDevice,
+          ID3D11Resource*         pResource,
+    const D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC& Desc)
+  : D3D11DeviceChild<ID3D11VideoProcessorInputView>(pDevice),
+    m_common(pDevice, pResource, CreateViewInfo(Desc)),
+    m_desc(Desc), m_destructionNotifier(this) {
+
+  }
+
+
+  D3D11VideoProcessorInputView::~D3D11VideoProcessorInputView() {
+
   }
 
 
@@ -269,7 +266,7 @@ namespace dxvk {
 
   void STDMETHODCALLTYPE D3D11VideoProcessorInputView::GetResource(
           ID3D11Resource**        ppResource) {
-    *ppResource = m_resource.ref();
+    *ppResource = m_common.GetResource();
   }
 
 
@@ -279,47 +276,40 @@ namespace dxvk {
   }
 
 
+  DxvkImageViewKey D3D11VideoProcessorInputView::CreateViewInfo(
+    const D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC& Desc) {
+    DxvkImageViewKey viewInfo = { };
+    viewInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+
+    switch (Desc.ViewDimension) {
+      case D3D11_VPIV_DIMENSION_TEXTURE2D:
+        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.mipIndex   = Desc.Texture2D.MipSlice;
+        viewInfo.mipCount   = 1;
+        viewInfo.layerIndex = Desc.Texture2D.ArraySlice;
+        viewInfo.layerCount = 1;
+        break;
+
+      case D3D11_VPIV_DIMENSION_UNKNOWN:
+        throw DxvkError("Invalid view dimension");
+    }
+
+    return viewInfo;
+  }
+
 
   D3D11VideoProcessorOutputView::D3D11VideoProcessorOutputView(
           D3D11Device*            pDevice,
           ID3D11Resource*         pResource,
     const D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC& Desc)
   : D3D11DeviceChild<ID3D11VideoProcessorOutputView>(pDevice),
-    m_resource(pResource), m_desc(Desc), m_destructionNotifier(this) {
-    D3D11_COMMON_RESOURCE_DESC resourceDesc = { };
-    GetCommonResourceDesc(pResource, &resourceDesc);
-
-    DXGI_VK_FORMAT_INFO formatInfo = pDevice->LookupFormat(
-      resourceDesc.Format, DXGI_VK_FORMAT_MODE_COLOR);
-
-    DxvkImageViewKey viewInfo;
-    viewInfo.format = formatInfo.Format;
-    viewInfo.aspects = lookupFormatInfo(viewInfo.format)->aspectMask;
-    viewInfo.packedSwizzle = DxvkImageViewKey::packSwizzle(formatInfo.Swizzle);
-    viewInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-
-    switch (m_desc.ViewDimension) {
-      case D3D11_VPOV_DIMENSION_TEXTURE2D:
-        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.mipIndex   = m_desc.Texture2D.MipSlice;
-        viewInfo.mipCount   = 1;
-        viewInfo.layerIndex = 0;
-        viewInfo.layerCount = 1;
-        break;
-
-      case D3D11_VPOV_DIMENSION_TEXTURE2DARRAY:
-        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        viewInfo.mipIndex   = m_desc.Texture2DArray.MipSlice;
-        viewInfo.mipCount   = 1;
-        viewInfo.layerIndex = m_desc.Texture2DArray.FirstArraySlice;
-        viewInfo.layerCount = m_desc.Texture2DArray.ArraySize;
-        break;
-
-      case D3D11_VPOV_DIMENSION_UNKNOWN:
-        throw DxvkError("Invalid view dimension");
+    m_common(pDevice, pResource, CreateViewInfo(Desc)),
+    m_desc(Desc), m_destructionNotifier(this) {
+    // TODO: handle ClearView for planar outputs
+    auto views = m_common.GetViews();
+    if (views[1] == nullptr) {
+      m_view = views[0];
     }
-
-    m_view = GetCommonTexture(pResource)->GetImage()->createView(viewInfo);
   }
 
 
@@ -355,7 +345,7 @@ namespace dxvk {
 
   void STDMETHODCALLTYPE D3D11VideoProcessorOutputView::GetResource(
           ID3D11Resource**        ppResource) {
-    *ppResource = m_resource.ref();
+    *ppResource = m_common.GetResource();
   }
 
 
@@ -363,6 +353,37 @@ namespace dxvk {
           D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC* pDesc) {
     *pDesc = m_desc;
   }
+
+
+  DxvkImageViewKey D3D11VideoProcessorOutputView::CreateViewInfo(
+    const D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC& Desc) {
+    DxvkImageViewKey viewInfo = { };
+    viewInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    switch (Desc.ViewDimension) {
+      case D3D11_VPOV_DIMENSION_TEXTURE2D:
+        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.mipIndex   = Desc.Texture2D.MipSlice;
+        viewInfo.mipCount   = 1;
+        viewInfo.layerIndex = 0;
+        viewInfo.layerCount = 1;
+        break;
+
+      case D3D11_VPOV_DIMENSION_TEXTURE2DARRAY:
+        viewInfo.viewType   = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        viewInfo.mipIndex   = Desc.Texture2DArray.MipSlice;
+        viewInfo.mipCount   = 1;
+        viewInfo.layerIndex = Desc.Texture2DArray.FirstArraySlice;
+        viewInfo.layerCount = Desc.Texture2DArray.ArraySize;
+        break;
+
+      case D3D11_VPOV_DIMENSION_UNKNOWN:
+        throw DxvkError("Invalid view dimension");
+    }
+
+    return viewInfo;
+  }
+
 
 
 
@@ -1040,25 +1061,46 @@ namespace dxvk {
     });
 
     auto videoProcessor = static_cast<D3D11VideoProcessor*>(pVideoProcessor);
+    auto outputView = static_cast<D3D11VideoProcessorOutputView*>(pOutputView);
+    auto views = outputView->GetCommon().GetViews();
     bool hasStreamsEnabled = false;
 
-    // Resetting and restoring all context state incurs
-    // a lot of overhead, so only do it as necessary
-    for (uint32_t i = 0; i < StreamCount; i++) {
-      auto streamState = videoProcessor->GetStreamState(i);
+    m_dstIsYCbCr = outputView->GetCommon().IsYCbCr();
 
-      if (!pStreams[i].Enable || !streamState)
+    for (uint32_t vi = 0; vi < views.size(); vi++) {
+      if (views[vi] == nullptr)
         continue;
 
-      if (!hasStreamsEnabled) {
-        m_ctx->ResetDirtyTracking();
-        m_ctx->ResetCommandListState();
+      bool outputBound = false;
 
-        BindOutputView(pOutputView);
-        hasStreamsEnabled = true;
+      // Resetting and restoring all context state incurs
+      // a lot of overhead, so only do it as necessary
+      for (uint32_t i = 0; i < StreamCount; i++) {
+        auto streamState = videoProcessor->GetStreamState(i);
+
+        if (!pStreams[i].Enable || !streamState)
+          continue;
+
+        if (!hasStreamsEnabled) {
+          m_ctx->ResetDirtyTracking();
+          m_ctx->ResetCommandListState();
+          hasStreamsEnabled = true;
+        }
+
+        if (!outputBound) {
+          BindOutputView(views[vi]);
+          outputBound = true;
+        }
+
+        if (views[1] == nullptr)
+          m_exportMode = ExportRGBA;
+        else if (vi == 0)
+          m_exportMode = ExportY;
+        else
+          m_exportMode = ExportCbCr;
+
+        BlitStream(streamState, &pStreams[i]);
       }
-
-      BlitStream(streamState, &pStreams[i]);
     }
 
     if (hasStreamsEnabled) {
@@ -1201,9 +1243,7 @@ namespace dxvk {
 
 
   void D3D11VideoContext::BindOutputView(
-          ID3D11VideoProcessorOutputView* pOutputView) {
-    auto dxvkView = static_cast<D3D11VideoProcessorOutputView*>(pOutputView)->GetView();
-
+          Rc<DxvkImageView> dxvkView) {
     m_ctx->EmitCs([this, cView = dxvkView] (DxvkContext* ctx) {
       DxvkImageUsageInfo usage = { };
       usage.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -1245,9 +1285,12 @@ namespace dxvk {
 
     m_ctx->EmitCs([this,
       cStreamState  = *pStreamState,
-      cImage        = view->GetImage(),
-      cViews        = view->GetViews(),
-      cIsYCbCr      = view->IsYCbCr()
+      cImage        = view->GetCommon().GetImage(),
+      cViews        = view->GetCommon().GetViews(),
+      cSrcIsYCbCr   = view->GetCommon().IsYCbCr(),
+      cDstIsYCbCr   = m_dstIsYCbCr,
+      cDstExtent    = m_dstExtent,
+      cExportMode   = m_exportMode
     ] (DxvkContext* ctx) {
       DxvkImageUsageInfo usage = { };
       usage.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -1259,14 +1302,14 @@ namespace dxvk {
       VkViewport viewport;
       viewport.x        = 0.0f;
       viewport.y        = 0.0f;
-      viewport.width    = float(m_dstExtent.width);
-      viewport.height   = float(m_dstExtent.height);
+      viewport.width    = float(cDstExtent.width);
+      viewport.height   = float(cDstExtent.height);
       viewport.minDepth = 0.0f;
       viewport.maxDepth = 1.0f;
 
       VkRect2D scissor;
       scissor.offset = { 0, 0 };
-      scissor.extent = m_dstExtent;
+      scissor.extent = cDstExtent;
 
       if (cStreamState.dstRectEnabled) {
         viewport.x      = float(cStreamState.dstRect.left);
@@ -1300,8 +1343,9 @@ namespace dxvk {
       uboData.yMin = 0.0f;
       uboData.yMax = 1.0f;
       uboData.isPlanar = cViews[1] != nullptr;
+      uboData.exportMode = cExportMode;
 
-      if (cIsYCbCr)
+      if (cSrcIsYCbCr && !cDstIsYCbCr)
         ApplyYCbCrMatrix(uboData.colorMatrix, cStreamState.colorSpace.YCbCr_Matrix);
 
       if (cStreamState.colorSpace.Nominal_Range) {

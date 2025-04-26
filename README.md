@@ -102,26 +102,3 @@ Inside the DXVK directory, run:
 ```
 
 This will create a folder `dxvk-llvm_mingw`, which contains both 32-bit and 64-bit versions of DXVK.
-
-# DXVK Native
-
-DXVK Native is a version of DXVK which allows it to be used natively without Wine.
-
-This is primarily useful for game and application ports to either avoid having to write another rendering backend, or to help with port bringup during development.
-
-#### The simple way to build
-Inside the DXVK directory, run:
-```
-./package-native.sh master dxvk-llvm_mingw-native --no-package
-```
-
-### How does it work?
-
-DXVK Native replaces certain Windows-isms with a platform and framework-agnostic replacement, for example, `HWND`s can become `SDL_Window*`s, etc.
-All it takes to do that is to add another WSI backend.
-
-**Note:** DXVK Native requires a backend to be explicitly set via the `DXVK_WSI_DRIVER` environment variable. The current built-in options are `SDL3`, `SDL2`, and `GLFW`.
-
-DXVK Native comes with a slim set of Windows header definitions required for D3D9/11 and the MinGW headers for D3D9/11.
-In most cases, it will end up being plug and play with your renderer, but there may be certain teething issues such as:
-- `__uuidof(type)` is supported, but `__uuidof(variable)` is not supported. Use `__uuidof_var(variable)` instead.

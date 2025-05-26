@@ -42,7 +42,7 @@ namespace dxvk::hud {
      * \returns Base offset for next item
      */
     virtual HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -77,7 +77,7 @@ namespace dxvk::hud {
      * \returns Base offset for next item
      */
     void render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer);
@@ -151,7 +151,7 @@ namespace dxvk::hud {
   public:
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -172,7 +172,7 @@ namespace dxvk::hud {
     ~HudClientApiItem();
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -198,7 +198,7 @@ namespace dxvk::hud {
     ~HudDeviceInfoItem();
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -227,7 +227,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -259,7 +259,7 @@ namespace dxvk::hud {
     ~HudFrameTimeItem();
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -298,18 +298,14 @@ namespace dxvk::hud {
 
     Rc<DxvkDevice>            m_device;
     Rc<DxvkBuffer>            m_gpuBuffer;
-    Rc<DxvkBufferView>        m_textView;
+    Rc<DxvkBufferView>        m_textWrView;
+    Rc<DxvkBufferView>        m_textRdView;
     Rc<DxvkGpuQuery>          m_query;
 
-    VkDescriptorSetLayout     m_computeSetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout          m_computePipelineLayout = VK_NULL_HANDLE;
+    const DxvkPipelineLayout* m_computePipelineLayout = nullptr;
+    const DxvkPipelineLayout* m_gfxPipelineLayout     = nullptr;
+
     VkPipeline                m_computePipeline = VK_NULL_HANDLE;
-
-    HudShaderModule           m_vs;
-    HudShaderModule           m_fs;
-
-    VkDescriptorSetLayout     m_gfxSetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout          m_gfxPipelineLayout = VK_NULL_HANDLE;
 
     std::unordered_map<HudPipelineKey,
       VkPipeline, DxvkHash, DxvkEq> m_gfxPipelines;
@@ -317,7 +313,7 @@ namespace dxvk::hud {
     uint32_t                  m_nextDataPoint = 0u;
 
     void processFrameTimes(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
             HudRenderer&        renderer,
             uint32_t            dataPoint,
@@ -325,7 +321,7 @@ namespace dxvk::hud {
             HudPos              maxPos);
 
     void drawFrameTimeGraph(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
             HudRenderer&        renderer,
             uint32_t            dataPoint,
@@ -333,14 +329,12 @@ namespace dxvk::hud {
             HudPos              graphSize);
 
     void createResources(
-      const DxvkContextObjects& ctx);
+      const Rc<DxvkCommandList>&ctx);
 
     void createComputePipeline(
           HudRenderer&          renderer);
 
-    VkDescriptorSetLayout createDescriptorSetLayout();
-
-    VkPipelineLayout createPipelineLayout();
+    const DxvkPipelineLayout* createPipelineLayout();
 
     VkPipeline getPipeline(
             HudRenderer&        renderer,
@@ -369,7 +363,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -410,7 +404,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -448,7 +442,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -479,7 +473,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -509,7 +503,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -540,7 +534,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -574,14 +568,7 @@ namespace dxvk::hud {
     Rc<DxvkBuffer>            m_dataBuffer;
     std::vector<DrawInfo>     m_drawInfos;
 
-    HudShaderModule           m_vsBackground;
-    HudShaderModule           m_fsBackground;
-
-    HudShaderModule           m_vsVisualize;
-    HudShaderModule           m_fsVisualize;
-
-    VkDescriptorSetLayout     m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout          m_pipelineLayout = VK_NULL_HANDLE;
+    const DxvkPipelineLayout* m_pipelineLayout = nullptr;
 
     std::unordered_map<HudPipelineKey,
       PipelinePair, DxvkHash, DxvkEq> m_pipelines;
@@ -593,19 +580,17 @@ namespace dxvk::hud {
       const DxvkMemoryChunkStats& chunk);
 
     void flushDraws(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer);
 
     void updateDataBuffer(
-      const DxvkContextObjects& ctx,
-            VkDescriptorBufferInfo& drawDescriptor,
-            VkDescriptorBufferInfo& dataDescriptor);
+      const Rc<DxvkCommandList>&ctx,
+            DxvkResourceBufferInfo& drawDescriptor,
+            DxvkResourceBufferInfo& dataDescriptor);
 
-    VkDescriptorSetLayout createSetLayout();
-
-    VkPipelineLayout createPipelineLayout();
+    const DxvkPipelineLayout* createPipelineLayout();
 
     PipelinePair createPipeline(
             HudRenderer&        renderer,
@@ -632,7 +617,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -678,7 +663,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -713,7 +698,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,
@@ -756,7 +741,7 @@ namespace dxvk::hud {
     void update(dxvk::high_resolution_clock::time_point time);
 
     HudPos render(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const HudPipelineKey&     key,
       const HudOptions&         options,
             HudRenderer&        renderer,

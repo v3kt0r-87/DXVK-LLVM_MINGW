@@ -13,17 +13,6 @@
 namespace dxvk {
 
   /**
-   * \brief Context-provided objects
-   *
-   * Useful when submitting raw Vulkan commands to a command list.
-   */
-  struct DxvkContextObjects {
-    Rc<DxvkCommandList> cmd;
-    Rc<DxvkDescriptorPool> descriptorPool;
-  };
-
-
-  /**
    * \brief DXVK context
    * 
    * Tracks pipeline state and records command lists.
@@ -125,8 +114,9 @@ namespace dxvk {
      *
      * Invalidates all state and provides the caller
      * with the objects necessary to start drawing.
+     * \returns Current command list object
      */
-    DxvkContextObjects beginExternalRendering();
+    Rc<DxvkCommandList> beginExternalRendering();
 
     /**
      * \brief Begins generating query data
@@ -152,15 +142,7 @@ namespace dxvk {
     void bindRenderTargets(
             DxvkRenderTargets&&   targets,
             VkImageAspectFlags    feedbackLoop) {
-      // Set up default render pass ops and normalize layouts
       m_state.om.renderTargets = std::move(targets);
-
-      for (uint32_t i = 0; i < MaxNumRenderTargets; i++) {
-        auto& rt = m_state.om.renderTargets.color[i];
-
-        if (rt.view)
-          rt.layout = rt.view->pickLayout(rt.layout);
-      }
 
       if (unlikely(m_state.gp.state.om.feedbackLoop() != feedbackLoop)) {
         m_state.gp.state.om.setFeedbackLoop(feedbackLoop);
@@ -248,7 +230,7 @@ namespace dxvk {
             VkShaderStageFlags    stages,
             uint32_t              slot,
             DxvkBufferSlice&&     buffer) {
-      m_rc[slot].bufferSlice = std::move(buffer);
+      m_uniformBuffers[slot] = std::move(buffer);
 
       m_descriptorState.dirtyBuffers(stages);
     }
@@ -264,7 +246,7 @@ namespace dxvk {
             uint32_t              slot,
             VkDeviceSize          offset,
             VkDeviceSize          length) {
-      m_rc[slot].bufferSlice.setRange(offset, length);
+      m_uniformBuffers[slot].setRange(offset, length);
 
       m_descriptorState.dirtyBuffers(stages);
     }
@@ -280,12 +262,10 @@ namespace dxvk {
             VkShaderStageFlags    stages,
             uint32_t              slot,
             Rc<DxvkImageView>&&   view) {
-      if (m_rc[slot].bufferView != nullptr) {
-        m_rc[slot].bufferSlice = DxvkBufferSlice();
-        m_rc[slot].bufferView  = nullptr;
-      }
+      if (m_resources[slot].bufferView)
+        m_resources[slot].bufferView = nullptr;
 
-      m_rc[slot].imageView = std::move(view);
+      m_resources[slot].imageView = std::move(view);
 
       m_descriptorState.dirtyViews(stages);
     }
@@ -301,16 +281,10 @@ namespace dxvk {
             VkShaderStageFlags    stages,
             uint32_t              slot,
             Rc<DxvkBufferView>&&  view) {
-      if (m_rc[slot].imageView != nullptr)
-        m_rc[slot].imageView = nullptr;
+      if (m_resources[slot].imageView)
+        m_resources[slot].imageView = nullptr;
 
-      if (view != nullptr) {
-        m_rc[slot].bufferSlice = DxvkBufferSlice(view);
-        m_rc[slot].bufferView = std::move(view);
-      } else {
-        m_rc[slot].bufferSlice = DxvkBufferSlice();
-        m_rc[slot].bufferView = nullptr;
-      }
+      m_resources[slot].bufferView = std::move(view);
 
       m_descriptorState.dirtyViews(stages);
     }
@@ -328,9 +302,9 @@ namespace dxvk {
             VkShaderStageFlags    stages,
             uint32_t              slot,
             Rc<DxvkSampler>&&     sampler) {
-      m_rc[slot].sampler = std::move(sampler);
+      m_samplers[slot] = std::move(sampler);
 
-      m_descriptorState.dirtyViews(stages);
+      m_descriptorState.dirtySamplers(stages);
     }
 
     /**
@@ -1400,7 +1374,7 @@ namespace dxvk {
     DxvkDescriptorState     m_descriptorState;
 
     Rc<DxvkDescriptorPool>  m_descriptorPool;
-    Rc<DxvkDescriptorManager> m_descriptorManager;
+    Rc<DxvkDescriptorPoolSet> m_descriptorManager;
 
     DxvkBarrierBatch        m_sdmaAcquires;
     DxvkBarrierBatch        m_sdmaBarriers;
@@ -1421,9 +1395,12 @@ namespace dxvk {
     std::array<DxvkDeferredResolve, MaxNumRenderTargets + 1u> m_deferredResolves = { };
 
     std::vector<VkWriteDescriptorSet> m_descriptorWrites;
-    std::vector<DxvkDescriptorInfo>   m_descriptors;
+    std::vector<DxvkLegacyDescriptor> m_descriptorInfos;
 
-    std::array<DxvkShaderResourceSlot, MaxNumResourceSlots>  m_rc;
+    std::array<Rc<DxvkSampler>, MaxNumSamplerSlots> m_samplers;
+    std::array<DxvkBufferSlice, MaxNumUniformBufferSlots> m_uniformBuffers;
+    std::array<DxvkViewPair, MaxNumResourceSlots> m_resources;
+
     std::array<DxvkGraphicsPipeline*, 4096> m_gpLookupCache = { };
     std::array<DxvkComputePipeline*,   256> m_cpLookupCache = { };
 
@@ -1459,7 +1436,7 @@ namespace dxvk {
             VkOffset3D            imageOffset,
             VkExtent3D            imageExtent,
             VkImageLayout         imageLayout,
-      const DxvkBufferSliceHandle& bufferSlice,
+      const DxvkResourceBufferInfo& bufferSlice,
             VkDeviceSize          bufferRowAlignment,
             VkDeviceSize          bufferSliceAlignment);
 
@@ -1720,7 +1697,7 @@ namespace dxvk {
     void invalidateState();
 
     template<VkPipelineBindPoint BindPoint>
-    void updateResourceBindings(const DxvkBindingLayoutObjects* layout);
+    void updateResourceBindings(const DxvkPipelineBindings* layout);
 
     void updateComputeShaderResources();
     void updateGraphicsShaderResources();
@@ -1781,8 +1758,7 @@ namespace dxvk {
     
     template<VkPipelineBindPoint BindPoint>
     bool checkResourceHazards(
-      const DxvkBindingLayout&        layout,
-            uint32_t                  setMask);
+      const DxvkPipelineBindings*     layout);
 
     bool checkComputeHazards();
 
@@ -2158,6 +2134,12 @@ namespace dxvk {
 
       // Check if there are any pending reads to avoid write-after-read issues.
       return pred(DxvkAccess::Read);
+    }
+
+    DxvkPipelineLayoutType getActivePipelineLayoutType(VkPipelineBindPoint bindPoint) const {
+      return (bindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS && m_flags.test(DxvkContextFlag::GpIndependentSets))
+        ? DxvkPipelineLayoutType::Independent
+        : DxvkPipelineLayoutType::Merged;
     }
 
     bool needsDrawBarriers();

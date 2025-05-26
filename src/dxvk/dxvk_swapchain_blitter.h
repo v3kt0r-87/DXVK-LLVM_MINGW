@@ -131,7 +131,7 @@ namespace dxvk {
      * \param [in] srcRect Source rectangle to present
      */
     void present(
-      const DxvkContextObjects& ctx,
+      const Rc<DxvkCommandList>&ctx,
       const Rc<DxvkImageView>&  dstView,
             VkRect2D            dstRect,
       const Rc<DxvkImageView>&  srcView,
@@ -206,22 +206,8 @@ namespace dxvk {
       VkExtent2D cursorExtent;
     };
 
-    struct ShaderModule {
-      VkShaderModuleCreateInfo moduleInfo = { VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO };
-      VkPipelineShaderStageCreateInfo stageInfo = { VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO };
-    };
-
     Rc<DxvkDevice>      m_device;
     Rc<hud::Hud>        m_hud;
-
-    ShaderModule        m_shaderVsBlit;
-    ShaderModule        m_shaderFsCopy;
-    ShaderModule        m_shaderFsBlit;
-    ShaderModule        m_shaderFsMsResolve;
-    ShaderModule        m_shaderFsMsBlit;
-
-    ShaderModule        m_shaderVsCursor;
-    ShaderModule        m_shaderFsCursor;
 
     dxvk::mutex         m_mutex;
     Rc<DxvkBuffer>      m_gammaBuffer;
@@ -240,13 +226,11 @@ namespace dxvk {
     Rc<DxvkSampler>     m_samplerCursorNearest;
 
     Rc<DxvkImage>       m_hudImage;
-    Rc<DxvkImageView>   m_hudView;
+    Rc<DxvkImageView>   m_hudRtv;
+    Rc<DxvkImageView>   m_hudSrv;
 
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
-
-    VkDescriptorSetLayout m_cursorSetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout      m_cursorPipelineLayout = VK_NULL_HANDLE;
+    const DxvkPipelineLayout* m_blitLayout = nullptr;
+    const DxvkPipelineLayout* m_cursorLayout = nullptr;
 
     std::unordered_map<DxvkSwapchainPipelineKey,
       VkPipeline, DxvkHash, DxvkEq> m_pipelines;
@@ -255,7 +239,7 @@ namespace dxvk {
       VkPipeline, DxvkHash, DxvkEq> m_cursorPipelines;
 
     void performDraw(
-      const DxvkContextObjects&         ctx,
+      const Rc<DxvkCommandList>&        ctx,
       const Rc<DxvkImageView>&          dstView,
             VkRect2D                    dstRect,
       const Rc<DxvkImageView>&          srcView,
@@ -263,7 +247,7 @@ namespace dxvk {
             VkBool32                    composite);
 
     void renderHudImage(
-      const DxvkContextObjects&         ctx,
+      const Rc<DxvkCommandList>&        ctx,
             VkExtent3D                  extent);
 
     void createHudImage(
@@ -272,42 +256,30 @@ namespace dxvk {
     void destroyHudImage();
 
     void renderCursor(
-      const DxvkContextObjects&         ctx,
+      const Rc<DxvkCommandList>&        ctx,
       const Rc<DxvkImageView>&          dstView);
 
     void uploadGammaImage(
-      const DxvkContextObjects&         ctx);
+      const Rc<DxvkCommandList>&        ctx);
 
     void uploadCursorImage(
-      const DxvkContextObjects&         ctx);
+      const Rc<DxvkCommandList>&        ctx);
 
     void uploadTexture(
-      const DxvkContextObjects&         ctx,
+      const Rc<DxvkCommandList>&        ctx,
       const Rc<DxvkImage>&              image,
       const Rc<DxvkBuffer>&             buffer);
 
     void createSampler();
 
-    void createShaders();
+    const DxvkPipelineLayout* createBlitPipelineLayout();
 
-    void initShader(
-            ShaderModule&               shader,
-            VkShaderStageFlagBits       stage,
-            size_t                      size,
-      const uint32_t*                   code);
+    const DxvkPipelineLayout* createCursorPipelineLayout();
 
-    VkDescriptorSetLayout createSetLayout();
-
-    VkDescriptorSetLayout createCursorSetLayout();
-
-    VkPipelineLayout createPipelineLayout();
-
-    VkPipelineLayout createCursorPipelineLayout();
-
-    VkPipeline createPipeline(
+    VkPipeline createBlitPipeline(
       const DxvkSwapchainPipelineKey&   key);
 
-    VkPipeline getPipeline(
+    VkPipeline getBlitPipeline(
       const DxvkSwapchainPipelineKey&   key);
 
     VkPipeline createCursorPipeline(

@@ -193,11 +193,6 @@ namespace dxvk {
     m_activeRTsWhichAreTextures = 0;
     m_alphaSwizzleRTs = 0;
     m_lastHazardsRT = 0;
-
-    // Determine used vendor ID
-    D3DADAPTER_IDENTIFIER9 adapterId9;
-    HRESULT res = m_adapter->GetAdapterIdentifier(0, &adapterId9);
-    m_vendorId = SUCCEEDED(res) ? adapterId9.VendorId : 0;
   }
 
 
@@ -1946,7 +1941,7 @@ namespace dxvk {
       VkExtent3D         extent) {
       // Clear depth if we need to.
       if (depthAspectMask != 0)
-        ClearImageView(alignment, offset, extent, m_state.depthStencil->GetDepthStencilView(), depthAspectMask, clearValueDepth);
+        ClearImageView(alignment, offset, extent, m_state.depthStencil->GetDepthStencilView(true), depthAspectMask, clearValueDepth);
 
       // Clear render targets if we need to.
       if (Flags & D3DCLEAR_TARGET) {
@@ -2254,25 +2249,28 @@ namespace dxvk {
     bool changed = old != Value;
 
     if (likely(changed)) {
-      const bool oldClipPlaneEnabled = IsClipPlaneEnabled();
+      const uint32_t vendorId            = m_adapter->GetVendorId();
+      const bool     isNvidia            = vendorId == uint32_t(DxvkGpuVendor::Nvidia);
+      const bool     isAmd               = vendorId == uint32_t(DxvkGpuVendor::Amd);
+      const bool     isIntel             = vendorId == uint32_t(DxvkGpuVendor::Intel);
 
-      const bool oldDepthBiasEnabled = IsDepthBiasEnabled();
-
-      const bool oldATOC = IsAlphaToCoverageEnabled();
-      const bool oldNVDB = states[D3DRS_ADAPTIVETESS_X] == uint32_t(D3D9Format::NVDB);
-      const bool oldAlphaTest = IsAlphaTestEnabled();
+      const bool     oldClipPlaneEnabled = IsClipPlaneEnabled();
+      const bool     oldDepthBiasEnabled = IsDepthBiasEnabled();
+      const bool     oldATOC             = !m_isD3D8Compatible ? IsAlphaToCoverageEnabled() : false;
+      const bool     oldNVDB             = !m_isD3D8Compatible ? states[D3DRS_ADAPTIVETESS_X] == uint32_t(D3D9Format::NVDB) : false;
+      const bool     oldAlphaTest        = IsAlphaTestEnabled();
 
       states[State] = Value;
 
-      // AMD's driver hack for ATOC and RESZ.
+      // AMD's driver hack for ATOC, RESZ, INST and CENT (also supported on Nvidia)
       if (unlikely(State == D3DRS_POINTSIZE &&
-                   m_vendorId == uint32_t(DxvkGpuVendor::Amd))) {
-        // ATOC
+                   !m_isD3D8Compatible && !isIntel)) {
+        // ATOC (AMD specific)
         constexpr uint32_t AlphaToCoverageEnable  = uint32_t(D3D9Format::A2M1);
         constexpr uint32_t AlphaToCoverageDisable = uint32_t(D3D9Format::A2M0);
 
-        if (Value == AlphaToCoverageEnable
-         || Value == AlphaToCoverageDisable) {
+        if ((Value == AlphaToCoverageEnable
+          || Value == AlphaToCoverageDisable) && isAmd) {
           m_amdATOC = Value == AlphaToCoverageEnable;
 
           bool newATOC = IsAlphaToCoverageEnabled();
@@ -2287,19 +2285,36 @@ namespace dxvk {
           return D3D_OK;
         }
 
-        // RESZ
+        // RESZ (AMD specific - once supported by Intel
+        // as well, however modern drivers do not expose it)
         constexpr uint32_t RESZ = 0x7fa05000;
-        if (Value == RESZ) {
+        if (Value == RESZ && isAmd) {
           ResolveZ();
+          return D3D_OK;
+        }
+
+        // INST (AMD specific)
+        if (unlikely(Value == uint32_t(D3D9Format::INST) && isAmd)) {
+          // Geometry instancing is supported by SM3, but ATI/AMD
+          // exposed this hack to retroactively enable it on their
+          // SM2-capable hardware. It's esentially a no-op.
+          return D3D_OK;
+        }
+
+        // CENT (AMD & Nvidia)
+        if (unlikely(Value == uint32_t(D3D9Format::CENT))) {
+          // Centroid (alternate pixel center) hack.
+          // Taken into account anyway, so yet another no-op.
           return D3D_OK;
         }
       }
 
-      // Nvidia/Intel's driver hack for ATOC.
+      // Nvidia's driver hack for ATOC (also supported on Intel), COPM and SSAA
       if (unlikely(State == D3DRS_ADAPTIVETESS_Y &&
-                   (m_vendorId == uint32_t(DxvkGpuVendor::Nvidia)
-                 || m_vendorId == uint32_t(DxvkGpuVendor::Intel)))) {
+                   !m_isD3D8Compatible && !isAmd)) {
+        // ATOC (Nvidia & Intel)
         constexpr uint32_t AlphaToCoverageEnable  = uint32_t(D3D9Format::ATOC);
+        // Disabling both ATOC and SSAA is done using D3DFMT_UNKNOWN (0)
         constexpr uint32_t AlphaToCoverageDisable = 0;
 
         if (Value == AlphaToCoverageEnable
@@ -2318,9 +2333,16 @@ namespace dxvk {
           return D3D_OK;
         }
 
-        if (unlikely(Value == uint32_t(D3D9Format::COPM))) {
+        // COPM (Nvidia specific)
+        if (unlikely(Value == uint32_t(D3D9Format::COPM) && isNvidia)) {
           // UE3 calls this MinimalNVIDIADriverShaderOptimization
           Logger::info("D3D9DeviceEx::SetRenderState: MinimalNVIDIADriverShaderOptimization is unsupported");
+          return D3D_OK;
+        }
+
+        // SSAA (Nvidia specific)
+        if (unlikely(Value == uint32_t(D3D9Format::SSAA) && isNvidia)) {
+          Logger::warn("D3D9DeviceEx::SetRenderState: Transparency supersampling is unsupported");
           return D3D_OK;
         }
       }
@@ -2553,14 +2575,16 @@ namespace dxvk {
         case D3DRS_ADAPTIVETESS_X:
         case D3DRS_ADAPTIVETESS_Z:
         case D3DRS_ADAPTIVETESS_W:
-          if (states[D3DRS_ADAPTIVETESS_X] == uint32_t(D3D9Format::NVDB) || oldNVDB) {
+          // Nvidia specific depth bounds test hack
+          if (!m_isD3D8Compatible &&
+              (states[D3DRS_ADAPTIVETESS_X] == uint32_t(D3D9Format::NVDB) || oldNVDB) &&
+              isNvidia) {
             m_flags.set(D3D9DeviceFlag::DirtyDepthBounds);
 
             if (m_state.depthStencil != nullptr && m_state.renderStates[D3DRS_ZENABLE])
               m_flags.set(D3D9DeviceFlag::DirtyFramebuffer);
-            break;
           }
-        [[fallthrough]];
+          break;
 
         default:
           static bool s_errorShown[256];
@@ -3149,9 +3173,6 @@ namespace dxvk {
 
     uint32_t offset = DestIndex * decl->GetSize(0);
 
-    auto slice = dst->GetBufferSlice<D3D9_COMMON_BUFFER_TYPE_REAL>();
-         slice = slice.subSlice(offset, slice.length() - offset);
-
     D3D9CompactVertexElements elements;
     for (const D3DVERTEXELEMENT9& element : decl->GetElements()) {
       elements.emplace_back(element);
@@ -3162,7 +3183,8 @@ namespace dxvk {
       cVertexCount    = VertexCount,
       cStartIndex     = SrcStartIndex,
       cInstanceCount  = GetInstanceCount(),
-      cBufferSlice    = slice
+      cBufferSlice    = dst->GetBufferSlice<D3D9_COMMON_BUFFER_TYPE_REAL>(),
+      cBufferOffset   = offset
     ](DxvkContext* ctx) mutable {
       Rc<DxvkShader> shader = m_swvpEmulator.GetShaderModule(this, std::move(cVertexElements));
 
@@ -3176,6 +3198,16 @@ namespace dxvk {
 
       ApplyPrimitiveType(ctx, D3DPT_POINTLIST);
 
+      // We need to bind the buffer as a view rather than a raw buffer.
+      // In order to avoid view bloat, create a format-less view for
+      // the entire buffer and pass the offset in via a push constant.
+      DxvkBufferViewKey viewKey;
+      viewKey.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+      viewKey.offset = cBufferSlice.offset();
+      viewKey.size = cBufferSlice.length();
+
+      auto bufferView = cBufferSlice.buffer()->createView(viewKey);
+
       // Unbind the pixel shader, we aren't drawing
       // to avoid val errors / UB.
       ctx->bindShader<VK_SHADER_STAGE_FRAGMENT_BIT>(nullptr);
@@ -3185,10 +3217,13 @@ namespace dxvk {
       draw.instanceCount = drawInfo.instanceCount;
       draw.firstVertex   = cStartIndex;
 
+      uint32_t byteOffset = cBufferOffset;
+
       ctx->bindShader<VK_SHADER_STAGE_GEOMETRY_BIT>(std::move(shader));
-      ctx->bindUniformBuffer(VK_SHADER_STAGE_GEOMETRY_BIT, getSWVPBufferSlot(), std::move(cBufferSlice));
+      ctx->bindResourceBufferView(VK_SHADER_STAGE_GEOMETRY_BIT, getSWVPBufferSlot(), std::move(bufferView));
+      ctx->pushConstants(sizeof(D3D9RenderStateInfo), sizeof(byteOffset), &byteOffset);
       ctx->draw(1u, &draw);
-      ctx->bindUniformBuffer(VK_SHADER_STAGE_GEOMETRY_BIT, getSWVPBufferSlot(), DxvkBufferSlice());
+      ctx->bindResourceBufferView(VK_SHADER_STAGE_GEOMETRY_BIT, getSWVPBufferSlot(), nullptr);
       ctx->bindShader<VK_SHADER_STAGE_GEOMETRY_BIT>(nullptr);
     });
 
@@ -4527,7 +4562,7 @@ namespace dxvk {
 
 
   bool D3D9DeviceEx::SupportsVCacheQuery() const {
-    return m_vendorId == uint32_t(DxvkGpuVendor::Nvidia);
+    return m_adapter->GetVendorId() == uint32_t(DxvkGpuVendor::Nvidia);
   }
 
 
@@ -6722,25 +6757,19 @@ namespace dxvk {
     // despite not having color writes enabled,
     // otherwise we might end up with unnecessary render pass spills
     boundMask &= (anyColorWriteMask | ~limitsRenderAreaMask);
-    for (uint32_t i : bit::BitMask(boundMask)) {
-      attachments.color[i] = {
-        m_state.renderTargets[i]->GetRenderTargetView(srgb),
-        m_state.renderTargets[i]->GetRenderTargetLayout(m_hazardLayout) };
-    }
+    for (uint32_t i : bit::BitMask(boundMask))
+      attachments.color[i].view = m_state.renderTargets[i]->GetRenderTargetView(srgb);
 
-    if (dsvBound) {
-      const bool depthWrite = m_state.renderStates[D3DRS_ZWRITEENABLE];
+    const bool depthWrite = m_state.renderStates[D3DRS_ZWRITEENABLE];
 
-      attachments.depth = {
-        m_state.depthStencil->GetDepthStencilView(),
-        m_state.depthStencil->GetDepthStencilLayout(depthWrite, m_activeHazardsDS != 0, m_hazardLayout) };
-    }
+    if (dsvBound)
+      attachments.depth.view = m_state.depthStencil->GetDepthStencilView(depthWrite);
 
     VkImageAspectFlags feedbackLoopAspects = 0u;
     if (m_hazardLayout == VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT) {
       if (m_activeHazardsRT != 0)
         feedbackLoopAspects |= VK_IMAGE_ASPECT_COLOR_BIT;
-      if (m_activeHazardsDS != 0 && attachments.depth.layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)
+      if (m_activeHazardsDS != 0 && depthWrite)
         feedbackLoopAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
     }
 

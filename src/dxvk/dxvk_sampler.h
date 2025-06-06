@@ -6,11 +6,13 @@
 #include "../util/thread.h"
 
 #include "dxvk_descriptor.h"
+#include "dxvk_descriptor_heap.h"
 #include "dxvk_hash.h"
 #include "dxvk_include.h"
 
 namespace dxvk {
 
+  class DxvkBuffer;
   class DxvkDevice;
   class DxvkSamplerPool;
 
@@ -143,7 +145,8 @@ namespace dxvk {
     
     DxvkSampler(
             DxvkSamplerPool*        pool,
-      const DxvkSamplerKey&         key);
+      const DxvkSamplerKey&         key,
+            uint16_t                index);
 
     ~DxvkSampler();
 
@@ -185,9 +188,7 @@ namespace dxvk {
      * \returns Sampler handle
      */
     DxvkSamplerDescriptor getDescriptor() const {
-      DxvkSamplerDescriptor result = { };
-      result.samplerObject = m_sampler;
-      return result;
+      return m_descriptor;
     }
     
     /**
@@ -206,7 +207,7 @@ namespace dxvk {
     DxvkSamplerPool*      m_pool      = nullptr;
     DxvkSamplerKey        m_key       = { };
 
-    VkSampler             m_sampler   = VK_NULL_HANDLE;
+    DxvkSamplerDescriptor m_descriptor = { };
 
     DxvkSampler*          m_lruPrev   = nullptr;
     DxvkSampler*          m_lruNext   = nullptr;
@@ -214,6 +215,88 @@ namespace dxvk {
     void release();
 
     VkBorderColor determineBorderColorType() const;
+
+  };
+
+
+  /**
+   * \brief Global sampler set and layout
+   */
+  struct DxvkSamplerDescriptorSet {
+    VkDescriptorSet       set         = VK_NULL_HANDLE;
+    VkDescriptorSetLayout layout      = VK_NULL_HANDLE;
+  };
+
+
+  /**
+   * \brief Sampler descriptor pool
+   *
+   * Manages a global descriptor pool and set for samplers.
+   */
+  class DxvkSamplerDescriptorHeap {
+
+  public:
+
+    DxvkSamplerDescriptorHeap(
+            DxvkDevice*               device,
+            uint32_t                  size);
+
+    ~DxvkSamplerDescriptorHeap();
+
+    /**
+     * \brief Retrieves descriptor set and layout
+     * \returns Descriptor set and layout handles
+     */
+    DxvkSamplerDescriptorSet getDescriptorSetInfo() const;
+
+    /**
+     * \brief Retrieves descriptor heap info
+     * \returns Sampler heap address and size
+     */
+    DxvkDescriptorHeapBindingInfo getDescriptorHeapInfo() const;
+
+    /**
+     * \brief Writes sampler descriptor to pool
+     *
+     * \param [in] index Sampler index
+     * \param [in] createInfo Sampler create info
+     * \returns Sampler descriptor
+     */
+    DxvkSamplerDescriptor createSampler(
+            uint16_t              index,
+      const VkSamplerCreateInfo*  createInfo);
+
+    /**
+     * \brief Frees a sampler
+     * \param [in] sampler Sampler descriptor
+     */
+    void freeSampler(
+            DxvkSamplerDescriptor sampler);
+
+  private:
+
+    DxvkDevice* m_device          = nullptr;
+    uint32_t    m_descriptorCount = 0u;
+
+    struct {
+      VkDescriptorPool      pool      = VK_NULL_HANDLE;
+      VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+      VkDescriptorSet       set       = VK_NULL_HANDLE;
+
+    } m_legacy;
+
+    struct {
+      Rc<DxvkBuffer>        buffer    = nullptr;
+
+      VkDeviceSize          descriptorOffset  = 0u;
+      VkDeviceSize          descriptorSize    = 0u;
+    } m_heap;
+
+    void initDescriptorLayout();
+
+    void initDescriptorPool();
+
+    void initDescriptorBuffer();
 
   };
 
@@ -239,7 +322,7 @@ namespace dxvk {
   public:
 
     // Lower limit for sampler counts in Vulkan.
-    constexpr static uint32_t MaxSamplerCount = 4000u;
+    constexpr static uint32_t MaxSamplerCount = 2048u;
 
     // Minimum number of samplers to keep alive.
     constexpr static uint32_t MinSamplerCount = 1024u;
@@ -255,6 +338,24 @@ namespace dxvk {
      * \returns Sampler object
      */
     Rc<DxvkSampler> createSampler(const DxvkSamplerKey& key);
+
+    /**
+     * \brief Queries the global sampler descriptor set
+     *
+     * Required to bind the set, and for pipeline creation.
+     * \returns Global sampler descriptor set and layout
+     */
+    DxvkSamplerDescriptorSet getDescriptorSetInfo() const {
+      return m_descriptorHeap.getDescriptorSetInfo();
+    }
+
+    /**
+     * \brief Retrieves descriptor heap info
+     * \returns Sampler heap address and size
+     */
+    DxvkDescriptorHeapBindingInfo getDescriptorHeapInfo() const {
+      return m_descriptorHeap.getDescriptorHeapInfo();
+    }
 
     /**
      * \brief Retrieves sampler statistics
@@ -273,9 +374,15 @@ namespace dxvk {
 
     DxvkDevice* m_device;
 
+    DxvkSamplerDescriptorHeap m_descriptorHeap;
+
     dxvk::mutex m_mutex;
     std::unordered_map<DxvkSamplerKey,
       DxvkSampler, DxvkHash, DxvkEq> m_samplers;
+
+    small_vector<uint16_t, MaxSamplerCount> m_freeList;
+
+    Rc<DxvkSampler> m_default = nullptr;
 
     DxvkSampler* m_lruHead = nullptr;
     DxvkSampler* m_lruTail = nullptr;
@@ -286,6 +393,10 @@ namespace dxvk {
     void releaseSampler(DxvkSampler* sampler);
 
     void destroyLeastRecentlyUsedSampler();
+
+    uint16_t allocateSamplerIndex();
+
+    void freeSamplerIndex(uint16_t index);
 
   };
 

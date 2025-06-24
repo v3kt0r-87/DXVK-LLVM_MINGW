@@ -27,7 +27,7 @@ namespace dxvk {
     supportsRawAccessChains = device->features().nvRawAccessChains.shaderRawAccessChains;
 
     // Raw access chains are currently broken with byte-address SSBO and descriptor buffers
-    rawAccessChainsOnlyStructured = device->canUseDescriptorBuffer();
+    rawAccessChainBug = supportsRawAccessChains && device->canUseDescriptorBuffer();
 
     switch (device->config().useRawSsbo) {
       case Tristate::Auto:  minSsboAlignment = devInfo.core.properties.limits.minStorageBufferOffsetAlignment; break;
@@ -36,7 +36,6 @@ namespace dxvk {
     }
     
     invariantPosition        = options.invariantPosition;
-    zeroInitWorkgroupMemory  = options.zeroInitWorkgroupMemory;
     forceVolatileTgsmAccess  = options.forceVolatileTgsmAccess;
     forceComputeUavBarriers  = options.forceComputeUavBarriers;
     disableMsaa              = options.disableMsaa;

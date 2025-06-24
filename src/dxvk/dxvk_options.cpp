@@ -4,7 +4,6 @@ namespace dxvk {
 
   DxvkOptions::DxvkOptions(const Config& config) {
     enableDebugUtils      = config.getOption<bool>    ("dxvk.enableDebugUtils",       false);
-    enableStateCache      = config.getOption<bool>    ("dxvk.enableStateCache",       true);
     enableMemoryDefrag    = config.getOption<Tristate>("dxvk.enableMemoryDefrag",     Tristate::Auto);
     numCompilerThreads    = config.getOption<int32_t> ("dxvk.numCompilerThreads",     0);
     enableGraphicsPipelineLibrary = config.getOption<Tristate>("dxvk.enableGraphicsPipelineLibrary", Tristate::Auto);
@@ -21,6 +20,9 @@ namespace dxvk {
     allowFse              = config.getOption<bool>    ("dxvk.allowFse",               false);
     deviceFilter          = config.getOption<std::string>("dxvk.deviceFilter",        "");
     tilerMode             = config.getOption<Tristate>("dxvk.tilerMode",              Tristate::Auto);
+
+    auto budget = config.getOption<int32_t>("dxvk.maxMemoryBudget", 0);
+    maxMemoryBudget = VkDeviceSize(std::max(budget, 0)) << 20u;
   }
 
 }

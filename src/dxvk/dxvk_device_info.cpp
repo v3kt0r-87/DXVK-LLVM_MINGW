@@ -312,6 +312,13 @@ namespace dxvk {
         }), extensions.end());
     }
 
+    // HACK: Use mesh shader extension support to determine whether we're
+    // running on older (pre-Turing) Nvidia GPUs.
+    m_hasMeshShader = std::find_if(extensions.begin(), extensions.end(),
+      [] (const VkExtensionProperties& ext) {
+        return !std::strcmp(ext.extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME);
+      }) != extensions.end();
+
     // Use the supported spec version as a way to indicate extension support.
     // We may ignore certain extensions if the spec version is too old.
     for (const auto& f : getFeatureList()) {
@@ -343,8 +350,8 @@ namespace dxvk {
 
       copyFeature(deviceInfo->pNext, nullptr, &m_featuresSupported.core);
 
-      #define HANDLE_CORE(name) copyFeature(&deviceInfo->pNext, nullptr, &m_featuresSupported.name)
-      #define HANDLE_EXT(name) copyFeature(&deviceInfo->pNext, &m_extensionsSupported.name, &m_featuresSupported.name)
+      #define HANDLE_CORE(name) copyFeature(deviceInfo->pNext, nullptr, &m_featuresSupported.name)
+      #define HANDLE_EXT(name) copyFeature(deviceInfo->pNext, &m_extensionsSupported.name, &m_featuresSupported.name)
 
       CORE_VERSIONS
       EXTENSIONS_WITH_FEATURES
@@ -420,9 +427,12 @@ namespace dxvk {
                                  || m_properties.vk12.driverID == VK_DRIVER_ID_AMD_OPEN_SOURCE
                                  || m_properties.vk12.driverID == VK_DRIVER_ID_AMD_PROPRIETARY
                                  || m_properties.vk12.driverID == VK_DRIVER_ID_MESA_NVK
-                                 || m_properties.vk12.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY
                                  || m_properties.vk12.driverID == VK_DRIVER_ID_INTEL_PROPRIETARY_WINDOWS
                                  || m_properties.vk12.driverID == VK_DRIVER_ID_MESA_LLVMPIPE;
+
+      // Pascal reportedly sees massive perf drops with descriptor buffer
+      if (m_properties.vk12.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY)
+        enableDescriptorBuffer = m_hasMeshShader;
 
       applyTristate(enableDescriptorBuffer, instance.options().enableDescriptorBuffer);
 
@@ -754,6 +764,7 @@ namespace dxvk {
       ENABLE_FEATURE(vk13, robustImageAccess, false),
       ENABLE_FEATURE(vk13, pipelineCreationCacheControl, false),
       ENABLE_FEATURE(vk13, shaderDemoteToHelperInvocation, true),
+      ENABLE_FEATURE(vk13, shaderZeroInitializeWorkgroupMemory, true),
       ENABLE_FEATURE(vk13, synchronization2, true),
 
       /* Allows sampling currently bound render targets for client APIs */

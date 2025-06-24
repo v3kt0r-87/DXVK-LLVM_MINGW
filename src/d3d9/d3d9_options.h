@@ -106,12 +106,12 @@ namespace dxvk {
     /// Forced aspect ratio, disable other modes
     std::string forceAspectRatio;
 
+    /// Forced refresh rate, disable other modes
+    uint32_t forceRefreshRate;
+
     /// Always use a spec constant to determine sampler type (instead of just in PS 1.x)
     /// Works around a game bug in Halo CE where it gives cube textures to 2d/volume samplers
     bool forceSamplerTypeSpecConstants;
-
-    /// Forces an MSAA level on the swapchain
-    int32_t forceSwapchainMSAA;
 
     /// Forces sample rate shading
     bool forceSampleRateShading;

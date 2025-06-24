@@ -30,11 +30,9 @@ namespace dxvk {
     /// Determines whether raw access chains are supported
     bool supportsRawAccessChains = false;
 
-    /// Whether to use raw access chains on byte-address buffers
-    bool rawAccessChainsOnlyStructured = true;
-
-    /// Clear thread-group shared memory to zero
-    bool zeroInitWorkgroupMemory = false;
+    /// Whether raw access require a normal access chain
+    /// for the binding to work properly
+    bool rawAccessChainBug = false;
 
     /// Declare vertex positions as invariant
     bool invariantPosition = false;

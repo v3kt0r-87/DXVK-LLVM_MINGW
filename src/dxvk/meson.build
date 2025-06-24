@@ -2,6 +2,7 @@ dxvk_shaders = files([
   'shaders/dxvk_blit_frag_1d.frag',
   'shaders/dxvk_blit_frag_2d.frag',
   'shaders/dxvk_blit_frag_3d.frag',
+  'shaders/dxvk_blit_frag_2d_ms.frag',
 
   'shaders/dxvk_buffer_to_image_d.frag',
   'shaders/dxvk_buffer_to_image_ds_export.frag',
@@ -113,7 +114,6 @@ dxvk_src = [
   'dxvk_signal.cpp',
   'dxvk_sparse.cpp',
   'dxvk_staging.cpp',
-  'dxvk_state_cache.cpp',
   'dxvk_stats.cpp',
   'dxvk_swapchain_blitter.cpp',
   'dxvk_unbound.cpp',

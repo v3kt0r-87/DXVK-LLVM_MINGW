@@ -7,6 +7,7 @@ windres = 'x86_64-w64-mingw32-windres'
 c_ld = 'lld'
 cpp_ld = 'lld'
 
+
 [properties]
 needs_exe_wrapper = true
 

@@ -10,7 +10,6 @@ cc = meson.get_compiler('c')
 dxvk_is_msvc = cpp.get_argument_syntax() == 'msvc'
 
 compiler_args = [
-  '-flto=full',
   '-msse',
   '-msse2',
   '-msse3',
@@ -26,10 +25,15 @@ compiler_args = [
   '-Wno-microsoft-exception-spec',
   '-Wno-extern-c-compat',
   '-Wno-unused-const-variable',
+  '-Wno-nontrivial-memcall',
+  '-Wno-inconsistent-missing-override',
+  '-Wno-unused-but-set-variable',
+  '-Wno-tautological-constant-out-of-range-compare',
+  '-Wno-unused-lambda-capture',
   '-Wno-missing-braces',
 ]
 
-link_args = ['-flto=full']
+link_args = []
 
 if get_option('build_id')
   link_args += [

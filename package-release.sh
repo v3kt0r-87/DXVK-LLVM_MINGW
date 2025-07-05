@@ -105,6 +105,7 @@ function build_arch {
         -Db_ndebug=if-release                               \
         -Dbuild_id=$opt_buildid                             \
         -Db_lto=true                                        \
+        -Db_lto_mode=thin                                   \
         "$DXVK_BUILD_DIR/build.$1"
 
   cd "$DXVK_BUILD_DIR/build.$1"

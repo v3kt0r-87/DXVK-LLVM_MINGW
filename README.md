@@ -1,5 +1,5 @@
-# DXVK – MinGW-LLVM Build with LTO
-This is a custom DXVK build compiled using MinGW-LLVM (LLVM 19.1.7) with LTO.
+# DXVK – MinGW-LLVM Build with Thin LTO
+This is a custom DXVK build compiled using MinGW-LLVM.
 
 **Built by:** SHANKAR VALLABHAN (v3kt0r-87)
 <br>
